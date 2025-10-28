@@ -9,7 +9,7 @@ import tqdm
 import yaml
 from torch.utils import data
 
-from models import nn
+from nets import nn
 from utils import util
 from utils.dataset import Dataset
 
