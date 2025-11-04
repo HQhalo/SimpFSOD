@@ -224,42 +224,121 @@ class DFL(torch.nn.Module):
         x = x.view(b, 4, self.ch, a).transpose(2, 1)
         return self.conv(x.softmax(1)).view(b, 4, a)
 
+class SAVPE(torch.nn.Module):
+    def __init__(self, filters, mid_ch, embed_dims):
+        super().__init__()
 
+        self.sematic = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, mid_ch, torch.nn.SiLU(), 3, p=1), Conv(mid_ch, mid_ch, torch.nn.SiLU(), 3, p=1)) for x in filters)
+        self.sematic[1].append(torch.nn.Upsample(scale_factor=2))
+        self.sematic[2].append(torch.nn.Upsample(scale_factor=4))
+        
+        self.activation = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, mid_ch, torch.nn.SiLU(), 1)) for x in filters)
+        self.activation[1].append(torch.nn.Upsample(scale_factor=2))
+        self.activation[2].append(torch.nn.Upsample(scale_factor=4))
+        
+        self.c = 16
+        self.cv3 = torch.nn.Conv2d(3 * mid_ch, embed_dims, 1)
+        self.cv4 = torch.nn.Conv2d(3 * mid_ch, self.c, 3, padding=1)
+        self.cv5 = torch.nn.Conv2d(1, self.c, 3, padding=1)
+        self.cv6 = torch.nn.Sequential(Conv(2 * self.c, self.c, torch.nn.SiLU(), 3, p=1), torch.nn.Conv2d(self.c, self.c, 3, padding=1))
+
+    def forward(self, x, vp):
+        y = [self.activation[i](xi) for i, xi in enumerate(x)]
+        y = self.cv4(torch.cat(y, dim=1))
+        
+        x = [self.sematic[i](xi) for i, xi in enumerate(x)]
+        
+        x = self.cv3(torch.cat(x, dim=1))
+        
+        B, C, H, W = x.shape 
+
+        Q = vp.shape[1]
+        
+        x = x.view(B, C, -1)
+
+        y = y.reshape(B, 1, self.c, H, W).expand(-1, Q, -1, -1, -1).reshape(B * Q, self.c, H, W)
+        vp = vp.reshape(B, Q, 1, H, W).reshape(B * Q, 1, H, W)
+        
+        y = self.cv6(torch.cat((y, self.cv5(vp)), dim=1))
+        
+        y = y.reshape(B, Q, self.c, -1)
+        vp = vp.reshape(B, Q, 1, -1)
+
+        score = y * vp + torch.logical_not(vp) * torch.finfo(y.dtype).min
+ 
+        score = torch.nn.functional.softmax(score, dim=-1, dtype=torch.float).to(score.dtype)
+
+        aggregated = score.transpose(-2, -3) @ x.reshape(B, self.c, C // self.c, -1).transpose(-1, -2)
+        
+        return torch.nn.functional.normalize(aggregated.transpose(-2, -3).reshape(B, Q, -1), dim=-1, p=2)
+
+class BNContrastiveHead(torch.nn.Module):
+    """
+    Batch Norm Contrastive Head using batch norm instead of l2-normalization.
+
+    Args:
+        embed_dims (int): Embed dimensions of text and image features.
+    """
+
+    def __init__(self, embed_dims: int):
+        """Initialize ContrastiveHead with region-text similarity parameters."""
+        super().__init__()
+        self.norm = torch.nn.BatchNorm2d(embed_dims)
+        # NOTE: use -10.0 to keep the init cls loss consistency with other losses
+        self.bias = torch.nn.Parameter(torch.tensor([-10.0]))
+        # use -1.0 is more stable
+        self.logit_scale = torch.nn.Parameter(-1.0 * torch.ones([]))
+
+    def forward(self, x, w):
+        """Forward function of contrastive learning."""
+        x = self.norm(x)
+        # w = F.normalize(w, dim=-1, p=2)
+        
+        x = torch.einsum("bchw,bkc->bkhw", x, w)
+        return x * self.logit_scale.exp() + self.bias
+    
 class Head(torch.nn.Module):
     anchors = torch.empty(0)
     strides = torch.empty(0)
 
-    def __init__(self, nc=80, filters=()):
+    def __init__(self, filters=(), embed_dims=512):
         super().__init__()
         self.ch = 16  # DFL channels
-        self.nc = nc  # number of classes
+        self.nc = 1 # only support single class
         self.nl = len(filters)  # number of detection layers
-        self.no = nc + self.ch * 4  # number of outputs per anchor
+        self.no = self.nc + self.ch * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
+        self.embed_dims = embed_dims
 
         box = max(64, filters[0] // 4)
-        cls = max(80, filters[0], self.nc)
+        mid_ch = max(80, filters[0])
+        self.mid_ch = mid_ch
 
         self.dfl = DFL(self.ch)
         self.box = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, box,torch.nn.SiLU(), k=3, p=1),
                                                            Conv(box, box,torch.nn.SiLU(), k=3, p=1),
                                                            torch.nn.Conv2d(box, out_channels=4 * self.ch,
                                                                            kernel_size=1)) for x in filters)
-        self.cls = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, x, torch.nn.SiLU(), k=3, p=1, g=x),
-                                                           Conv(x, cls, torch.nn.SiLU()),
-                                                           Conv(cls, cls, torch.nn.SiLU(), k=3, p=1, g=cls),
-                                                           Conv(cls, cls, torch.nn.SiLU()),
-                                                           torch.nn.Conv2d(cls, out_channels=self.nc,
+        self.emb = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, x, torch.nn.SiLU(), k=3, p=1, g=x),
+                                                           Conv(x, mid_ch, torch.nn.SiLU()),
+                                                           Conv(mid_ch, mid_ch, torch.nn.SiLU(), k=3, p=1, g=mid_ch),
+                                                           Conv(mid_ch, mid_ch, torch.nn.SiLU()),
+                                                           torch.nn.Conv2d(mid_ch, out_channels=embed_dims,
                                                                            kernel_size=1)) for x in filters)
+        self.savpe = SAVPE(filters, mid_ch, embed_dims)
+        self.bn = torch.nn.ModuleList(BNContrastiveHead(embed_dims) for _ in filters)
 
-    def forward(self, x):
-        for i, (box, cls) in enumerate(zip(self.box, self.cls)):
-            x[i] = torch.cat(tensors=(box(x[i]), cls(x[i])), dim=1)
+    def get_vpe(self, prompt, prompt_mask):
+        return self.savpe(prompt, prompt_mask)
+
+    def forward(self, x, vpe):
+        for i, (box, emb, bn) in enumerate(zip(self.box, self.emb, self.bn)):
+            x[i] = torch.cat(tensors=(box(x[i]), bn(emb(x[i]) , vpe)), dim=1)
         if self.training:
             return x
 
         self.anchors, self.strides = (i.transpose(0, 1) for i in make_anchors(x, self.stride))
-        x = torch.cat([i.view(x[0].shape[0], self.no, -1) for i in x], dim=2)
+        x = torch.cat([i.view(x[0].shape[0], self.no , -1) for i in x], dim=2)
         box, cls = x.split(split_size=(4 * self.ch, self.nc), dim=1)
 
         a, b = self.dfl(box).chunk(2, 1)
@@ -272,29 +351,37 @@ class Head(torch.nn.Module):
     def initialize_biases(self):
         # Initialize biases
         # WARNING: requires stride availability
-        for box, cls, s in zip(self.box, self.cls, self.stride):
+        for box, emb, s in zip(self.box, self.emb, self.stride):
             # box
             box[-1].bias.data[:] = 1.0
             # cls (.01 objects, 80 classes, 640 image)
-            cls[-1].bias.data[:self.nc] = math.log(5 / self.nc / (640 / s) ** 2)
+            emb[-1].bias.data[:self.mid_ch] = math.log(5 / self.mid_ch / (640 / s) ** 2)
 
 
 class YOLO(torch.nn.Module):
-    def __init__(self, width, depth, csp, num_classes):
+    def __init__(self, width, depth, csp, embed_dims=512):
         super().__init__()
         self.net = DarkNet(width, depth, csp)
         self.fpn = DarkFPN(width, depth, csp)
 
         img_dummy = torch.zeros(1, width[0], 256, 256)
-        self.head = Head(num_classes, (width[3], width[4], width[5]))
-        self.head.stride = torch.tensor([256 / x.shape[-2] for x in self.forward(img_dummy)])
+        vpe_dummy = torch.zeros(1, 1, embed_dims)
+
+        self.head = Head((width[3], width[4], width[5]))
+        self.head.stride = torch.tensor([256 / x.shape[-2] for x in self.forward(img_dummy, vpe_dummy )])
         self.stride = self.head.stride
         self.head.initialize_biases()
 
-    def forward(self, x):
+    def forward(self, x, vpe):
         x = self.net(x)
         x = self.fpn(x)
-        return self.head(list(x))
+
+        return self.head(list(x), vpe)
+
+    def get_vpe(self, p, p_mask):
+        p = self.net(p)
+        p = self.fpn(p)
+        return self.head.get_vpe(p, p_mask)
 
     def fuse(self):
         for m in self.modules():
@@ -305,43 +392,43 @@ class YOLO(torch.nn.Module):
         return self
 
 
-def yolo_v11_n(num_classes: int = 80):
+def yolo_v11_n():
     csp = [False, True]
     depth = [1, 1, 1, 1, 1, 1]
     width = [3, 16, 32, 64, 128, 256]
-    return YOLO(width, depth, csp, num_classes)
+    return YOLO(width, depth, csp)
 
 
-def yolo_v11_t(num_classes: int = 80):
+def yolo_v11_t():
     csp = [False, True]
     depth = [1, 1, 1, 1, 1, 1]
     width = [3, 24, 48, 96, 192, 384]
-    return YOLO(width, depth, csp, num_classes)
+    return YOLO(width, depth, csp)
 
 
-def yolo_v11_s(num_classes: int = 80):
+def yolo_v11_s():
     csp = [False, True]
     depth = [1, 1, 1, 1, 1, 1]
     width = [3, 32, 64, 128, 256, 512]
-    return YOLO(width, depth, csp, num_classes)
+    return YOLO(width, depth, csp)
 
 
-def yolo_v11_m(num_classes: int = 80):
+def yolo_v11_m():
     csp = [True, True]
     depth = [1, 1, 1, 1, 1, 1]
     width = [3, 64, 128, 256, 512, 512]
-    return YOLO(width, depth, csp, num_classes)
+    return YOLO(width, depth, csp)
 
 
-def yolo_v11_l(num_classes: int = 80):
+def yolo_v11_l():
     csp = [True, True]
     depth = [2, 2, 2, 2, 2, 2]
     width = [3, 64, 128, 256, 512, 512]
-    return YOLO(width, depth, csp, num_classes)
+    return YOLO(width, depth, csp)
 
 
-def yolo_v11_x(num_classes: int = 80):
+def yolo_v11_x():
     csp = [True, True]
     depth = [2, 2, 2, 2, 2, 2]
     width = [3, 96, 192, 384, 768, 768]
-    return YOLO(width, depth, csp, num_classes)
+    return YOLO(width, depth, csp)

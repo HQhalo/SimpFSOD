@@ -81,6 +81,24 @@ def wh2xy(x):
     y[:, 3] = x[:, 1] + x[:, 3] / 2  # bottom right y
     return y
 
+def xywh2xyxy(x):
+    """
+    Convert bounding box coordinates from (x, y, width, height) format to (x1, y1, x2, y2) format where (x1, y1) is the
+    top-left corner and (x2, y2) is the bottom-right corner. Note: ops per 2 channels faster than per channel.
+
+    Args:
+        x (np.ndarray | torch.Tensor): The input bounding box coordinates in (x, y, width, height) format.
+
+    Returns:
+        y (np.ndarray | torch.Tensor): The bounding box coordinates in (x1, y1, x2, y2) format.
+    """
+    assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
+    y = torch.empty_like(x) if isinstance(x, torch.Tensor) else numpy.empty_like(x)  # faster than clone/copy
+    xy = x[..., :2]  # centers
+    wh = x[..., 2:] / 2  # half width-height
+    y[..., :2] = xy - wh  # top left xy
+    y[..., 2:] = xy + wh  # bottom right xy
+    return y
 
 def make_anchors(x, strides, offset=0.5):
     assert x is not None
@@ -699,7 +717,15 @@ class ComputeLoss:
         x2y2 = anchor_points + rb
         return torch.cat(tensors=(x1y1, x2y2), dim=-1)
 
-    def __call__(self, outputs, targets):
+    def preprocess(self, box, batch_size, scale_tensor):
+        if box.shape[0] == 0:
+            out = torch.zeros(batch_size, 0, 5, device=self.device)
+        else:
+            out = torch.zeros(batch_size, 1, 5, device=self.device)
+            out[..., 1:5] = xywh2xyxy(box[..., 0:4].mul_(scale_tensor))
+        return out
+
+    def __call__(self, outputs, box):
         x = torch.cat([i.view(outputs[0].shape[0], self.no, -1) for i in outputs], dim=2)
         pred_distri, pred_scores = x.split(split_size=(self.reg_max * 4, self.nc), dim=1)
 
@@ -711,32 +737,7 @@ class ComputeLoss:
         input_size = torch.tensor(outputs[0].shape[2:], device=self.device, dtype=data_type) * self.stride[0]
         anchor_points, stride_tensor = make_anchors(outputs, self.stride, offset=0.5)
 
-        idx = targets['idx'].view(-1, 1)
-        cls = targets['cls'].view(-1, 1)
-        box = targets['box']
-
-        targets = torch.cat((idx, cls, box), dim=1).to(self.device)
-        if targets.shape[0] == 0:
-            gt = torch.zeros(batch_size, 0, 5, device=self.device)
-        else:
-            i = targets[:, 0]
-            _, counts = i.unique(return_counts=True)
-            counts = counts.to(dtype=torch.int32)
-            gt = torch.zeros(batch_size, counts.max(), 5, device=self.device)
-            for j in range(batch_size):
-                matches = i == j
-                n = matches.sum()
-                if n:
-                    gt[j, :n] = targets[matches, 1:]
-            x = gt[..., 1:5].mul_(input_size[[1, 0, 1, 0]])
-            y = torch.empty_like(x)
-            dw = x[..., 2] / 2  # half-width
-            dh = x[..., 3] / 2  # half-height
-            y[..., 0] = x[..., 0] - dw  # top left x
-            y[..., 1] = x[..., 1] - dh  # top left y
-            y[..., 2] = x[..., 0] + dw  # bottom right x
-            y[..., 3] = x[..., 1] + dh  # bottom right y
-            gt[..., 1:5] = y
+        gt = self.preprocess(box.clone(), batch_size, input_size[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = gt.split((1, 4), 2)
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
 

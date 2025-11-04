@@ -11,11 +11,9 @@ from torch.utils import data
 
 from nets import nn
 from utils import util
-from utils.dataset import Dataset
+from utils.dataset import VPDataset
 
 warnings.filterwarnings("ignore")
-
-data_dir = '../Dataset/COCO'
 
 
 def train(args, params):
@@ -33,20 +31,13 @@ def train(args, params):
     # EMA
     ema = util.EMA(model) if args.local_rank == 0 else None
 
-    filenames = []
-    with open(f'{data_dir}/train2017.txt') as f:
-        for filename in f.readlines():
-            filename = os.path.basename(filename.rstrip())
-            filenames.append(f'{data_dir}/images/train2017/' + filename)
-
-    sampler = None
-    dataset = Dataset(filenames, args.input_size, params, augment=True)
+    dataset = VPDataset("/content/got10k_tiny/train", 640, params, augment=True)
 
     if args.distributed:
         sampler = data.distributed.DistributedSampler(dataset)
 
     loader = data.DataLoader(dataset, args.batch_size, sampler is None, sampler,
-                             num_workers=8, pin_memory=True, collate_fn=Dataset.collate_fn)
+                             num_workers=8, pin_memory=True)
 
     # Scheduler
     num_steps = len(loader)
@@ -167,15 +158,10 @@ def train(args, params):
 
 @torch.no_grad()
 def test(args, params, model=None):
-    filenames = []
-    with open(f'{data_dir}/val2017.txt') as f:
-        for filename in f.readlines():
-            filename = os.path.basename(filename.rstrip())
-            filenames.append(f'{data_dir}/images/val2017/' + filename)
+    dataset = VPDataset("/content/got10k_tiny/train", 640, params, augment=True)
 
-    dataset = Dataset(filenames, args.input_size, params, augment=False)
     loader = data.DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4,
-                             pin_memory=True, collate_fn=Dataset.collate_fn)
+                             pin_memory=True)
 
     plot = False
     if not model:
