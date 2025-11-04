@@ -11,14 +11,14 @@ from torch.utils import data
 
 from nets import nn
 from utils import util
-from utils.dataset import VPDataset
+from utils.vp_dataset import VPDataset
 
 warnings.filterwarnings("ignore")
 
 
 def train(args, params):
     # Model
-    model = nn.yolo_v11_n(len(params['names']))
+    model = nn.yolo_v11_n()
     model.cuda()
 
     # Optimizer
@@ -32,7 +32,7 @@ def train(args, params):
     ema = util.EMA(model) if args.local_rank == 0 else None
 
     dataset = VPDataset("/content/got10k_tiny/train", 640, params, augment=True)
-
+    sampler = None
     if args.distributed:
         sampler = data.distributed.DistributedSampler(dataset)
 
@@ -78,21 +78,23 @@ def train(args, params):
             avg_box_loss = util.AverageMeter()
             avg_cls_loss = util.AverageMeter()
             avg_dfl_loss = util.AverageMeter()
-            for i, (samples, targets) in p_bar:
+            for i, (sample, box, prompt, prompt_mask) in p_bar:
 
                 step = i + num_steps * epoch
                 scheduler.step(step, optimizer)
 
-                samples = samples.cuda().float() / 255
-
+                sample = sample.cuda().float() / 255
+                prompt = prompt.cuda().float() / 255
+                prompt_mask = prompt_mask.cuda()
                 # Forward
                 with torch.amp.autocast('cuda'):
-                    outputs = model(samples)  # forward
-                    loss_box, loss_cls, loss_dfl = criterion(outputs, targets)
+                    vpe = model.get_vpe(prompt, prompt_mask)
+                    outputs = model(sample, vpe)  # forward
+                    loss_box, loss_cls, loss_dfl = criterion(outputs, box)
 
-                avg_box_loss.update(loss_box.item(), samples.size(0))
-                avg_cls_loss.update(loss_cls.item(), samples.size(0))
-                avg_dfl_loss.update(loss_dfl.item(), samples.size(0))
+                avg_box_loss.update(loss_box.item(), sample.size(0))
+                avg_cls_loss.update(loss_cls.item(), sample.size(0))
+                avg_dfl_loss.update(loss_dfl.item(), sample.size(0))
 
                 loss_box *= args.batch_size  # loss scaled by batch_size
                 loss_cls *= args.batch_size  # loss scaled by batch_size
@@ -228,13 +230,14 @@ def test(args, params, model=None):
 def profile(args, params):
     import thop
     shape = (1, 3, args.input_size, args.input_size)
-    model = nn.yolo_v11_n(len(params['names'])).fuse()
+    model = nn.yolo_v11_n().fuse()
 
     model.eval()
-    model(torch.zeros(shape))
+    model(torch.zeros(shape), torch.zeros(1, 1, 512))
 
     x = torch.empty(shape)
-    flops, num_params = thop.profile(model, inputs=[x], verbose=False)
+    y = torch.empty(1, 1, 512)
+    flops, num_params = thop.profile(model, inputs=[x, y], verbose=False)
     flops, num_params = thop.clever_format(nums=[2 * flops, num_params], format="%.3f")
 
     if args.local_rank == 0:

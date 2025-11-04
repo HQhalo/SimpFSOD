@@ -9,7 +9,8 @@ from PIL import Image
 from torch.utils import data
 import glob
 import albumentations
-import utils
+from utils import util
+
 
 class VPDataset(data.Dataset):
     def __init__(self, folder, input_size, params, augment):
@@ -138,7 +139,7 @@ class LoadVisualPrompt:
         imgsz = image.shape[1:]
         masksz = (int(imgsz[0] * self.scale_factor), int(imgsz[1] * self.scale_factor))
 
-        box = utils.xywh2xyxy(box) * torch.tensor(masksz)[[1, 0, 1, 0]]  # target boxes
+        box = util.xywh2xyxy(box) * torch.tensor(masksz)[[1, 0, 1, 0]]  # target boxes
         masks = self.make_mask(box, *masksz).float()
         
         return masks

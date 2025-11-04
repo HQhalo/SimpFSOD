@@ -737,7 +737,7 @@ class ComputeLoss:
         input_size = torch.tensor(outputs[0].shape[2:], device=self.device, dtype=data_type) * self.stride[0]
         anchor_points, stride_tensor = make_anchors(outputs, self.stride, offset=0.5)
 
-        gt = self.preprocess(box.clone(), batch_size, input_size[[1, 0, 1, 0]])
+        gt = self.preprocess(box.to(self.device).clone(), batch_size, input_size[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = gt.split((1, 4), 2)
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
 
