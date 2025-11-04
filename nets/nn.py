@@ -432,3 +432,13 @@ def yolo_v11_x():
     depth = [2, 2, 2, 2, 2, 2]
     width = [3, 96, 192, 384, 768, 768]
     return YOLO(width, depth, csp)
+
+
+def load_model(model_path):
+    model = yolo_v11_n()
+    weights = torch.load(model_path, weights_only=False)
+    pretrained_state_dict = weights['model'].state_dict()
+    new_state_dict = {k: v for k, v in pretrained_state_dict.items() if not k.startswith('head.cls')}
+
+    model.load_state_dict(new_state_dict, strict=False)
+    return model

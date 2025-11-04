@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore")
 
 def train(args, params):
     # Model
-    model = nn.yolo_v11_n()
+    model = nn.load_model("/home/quang/CODE/SimpFSOD/v11_n.pt")
     model.cuda()
 
     # Optimizer
@@ -31,7 +31,7 @@ def train(args, params):
     # EMA
     ema = util.EMA(model) if args.local_rank == 0 else None
 
-    dataset = VPDataset("/content/got10k_tiny/train", 640, params, augment=True)
+    dataset = VPDataset("/home/quang/DATA/got10k/train", 640, params, augment=True)
     sampler = None
     if args.distributed:
         sampler = data.distributed.DistributedSampler(dataset)
@@ -160,7 +160,7 @@ def train(args, params):
 
 @torch.no_grad()
 def test(args, params, model=None):
-    dataset = VPDataset("/content/got10k_tiny/train", 640, params, augment=True)
+    dataset = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=True)
 
     loader = data.DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4,
                              pin_memory=True)
@@ -184,24 +184,28 @@ def test(args, params, model=None):
     mean_ap = 0
     metrics = []
     p_bar = tqdm.tqdm(loader, desc=('%10s' * 5) % ('', 'precision', 'recall', 'mAP50', 'mAP'))
-    for samples, targets in p_bar:
+    for samples, box, prompt, prompt_mask in p_bar:
         samples = samples.cuda()
         samples = samples.half()  # uint8 to fp16/32
         samples = samples / 255.  # 0 - 255 to 0.0 - 1.0
         _, _, h, w = samples.shape  # batch-size, channels, height, width
         scale = torch.tensor((w, h, w, h)).cuda()
+        
+        prompt = prompt.cuda()
+        prompt = prompt.half()
+        prompt = prompt / 255.
+        prompt_mask = prompt_mask.cuda()
+        prompt_mask = prompt_mask.half()
+        
         # Inference
-        outputs = model(samples)
+        vpe = model.get_vpe(prompt, prompt_mask)
+        outputs = model(samples, vpe) 
         # NMS
         outputs = util.non_max_suppression(outputs)
         # Metrics
         for i, output in enumerate(outputs):
-            idx = targets['idx'] == i
-            cls = targets['cls'][idx]
-            box = targets['box'][idx]
-
-            cls = cls.cuda()
-            box = box.cuda()
+            cls = torch.zeros(1,1).cuda()
+            box = box[i].cuda()
 
             metric = torch.zeros(output.shape[0], n_iou, dtype=torch.bool).cuda()
 

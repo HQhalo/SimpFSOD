@@ -48,7 +48,10 @@ class VPDataset(data.Dataset):
                     })
         return data
             
-    def top_k_boxes(self, boxes, k=3):
+    def top_k_boxes(self, boxes, k=4):
+        n = len(boxes)
+        k = max(1, min(int(0.4 * n), k))
+
         areas = {
             img: w * h
             for img, (_, x, y, w, h) in boxes.items()
