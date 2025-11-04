@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from utils.util import make_anchors
+from utils.util import make_anchors, initialize_weights
 
 
 def fuse_conv(conv, norm):
@@ -327,6 +327,7 @@ class Head(torch.nn.Module):
                                                                            kernel_size=1)) for x in filters)
         self.savpe = SAVPE(filters, mid_ch, embed_dims)
         self.bn = torch.nn.ModuleList(BNContrastiveHead(embed_dims) for _ in filters)
+        initialize_weights(self.savpe)
 
     def get_vpe(self, prompt, prompt_mask):
         return self.savpe(prompt, prompt_mask)

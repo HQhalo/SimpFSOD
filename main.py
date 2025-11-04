@@ -171,7 +171,7 @@ def test(args, params, model=None):
         model = torch.load(f='./weights/best.pt', map_location='cuda')
         model = model['model'].float().fuse()
 
-    model.half()
+    # model.half()
     model.eval()
 
     # Configure
@@ -184,19 +184,20 @@ def test(args, params, model=None):
     mean_ap = 0
     metrics = []
     p_bar = tqdm.tqdm(loader, desc=('%10s' * 5) % ('', 'precision', 'recall', 'mAP50', 'mAP'))
-    for samples, box, prompt, prompt_mask in p_bar:
+    for samples, box_target, prompt, prompt_mask in p_bar:
         samples = samples.cuda()
-        samples = samples.half()  # uint8 to fp16/32
+        # samples = samples.half()  # uint8 to fp16/32
         samples = samples / 255.  # 0 - 255 to 0.0 - 1.0
         _, _, h, w = samples.shape  # batch-size, channels, height, width
         scale = torch.tensor((w, h, w, h)).cuda()
         
         prompt = prompt.cuda()
-        prompt = prompt.half()
         prompt = prompt / 255.
+        # prompt = prompt.half()
+
         prompt_mask = prompt_mask.cuda()
-        prompt_mask = prompt_mask.half()
-        
+        # prompt_mask = prompt_mask.half()
+
         # Inference
         vpe = model.get_vpe(prompt, prompt_mask)
         outputs = model(samples, vpe) 
@@ -205,10 +206,9 @@ def test(args, params, model=None):
         # Metrics
         for i, output in enumerate(outputs):
             cls = torch.zeros(1,1).cuda()
-            box = box[i].cuda()
+            box = box_target[i].cuda()
 
             metric = torch.zeros(output.shape[0], n_iou, dtype=torch.bool).cuda()
-
             if output.shape[0] == 0:
                 if cls.shape[0]:
                     metrics.append((metric, *torch.zeros((2, 0)).cuda(), cls.squeeze(-1)))
@@ -252,10 +252,10 @@ def profile(args, params):
 def main():
     parser = ArgumentParser()
     parser.add_argument('--input-size', default=640, type=int)
-    parser.add_argument('--batch-size', default=32, type=int)
+    parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--local-rank', default=0, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
-    parser.add_argument('--epochs', default=600, type=int)
+    parser.add_argument('--epochs', default=30, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
 

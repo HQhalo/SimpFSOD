@@ -739,6 +739,7 @@ class ComputeLoss:
 
         gt = self.preprocess(box.to(self.device).clone(), batch_size, input_size[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = gt.split((1, 4), 2)
+        gt_labels = gt_labels.long()
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
 
         pred_bboxes = self.box_decode(anchor_points, pred_distri)
@@ -768,3 +769,14 @@ class ComputeLoss:
         loss_dfl *= self.params['dfl']  # dfl gain
 
         return loss_box, loss_cls, loss_dfl
+
+def initialize_weights(model):
+    for m in model.modules():
+        t = type(m)
+        if t is torch.nn.Conv2d:
+            torch.nn.init.kaiming_uniform_(m.weight, a=1)
+            if m.bias is not None:
+                torch.nn.init.constant_(m.bias, 0.0)
+        elif t is torch.nn.BatchNorm2d:
+            torch.nn.init.constant_(m.weight, 1.0)
+            torch.nn.init.constant_(m.bias, 0.0)
