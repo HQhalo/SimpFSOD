@@ -11,7 +11,7 @@ from torch.utils import data
 
 from nets import nn
 from utils import util
-from utils.vp_dataset import VPDataset
+from utils.vp_dataset import VPDataset, ZaloVPDataset
 
 warnings.filterwarnings("ignore")
 
@@ -19,6 +19,14 @@ warnings.filterwarnings("ignore")
 def train(args, params):
     # Model
     model = nn.load_model("/home/quang/CODE/SimpFSOD/v11_n.pt")
+
+    for name, param in model.net.named_parameters():
+        param.requires_grad = False
+    for name, param in model.fpn.named_parameters():
+        param.requires_grad = False
+    # for name, param in model.head.box.named_parameters():
+    #     param.requires_grad = False
+
     model.cuda()
 
     # Optimizer
@@ -72,7 +80,7 @@ def train(args, params):
 
             if args.local_rank == 0:
                 print(('\n' + '%10s' * 5) % ('epoch', 'memory', 'box', 'cls', 'dfl'))
-                p_bar = tqdm.tqdm(p_bar, total=num_steps)
+                p_bar = tqdm.tqdm(p_bar, total=num_steps, dynamic_ncols=False, ncols=100)
 
             optimizer.zero_grad()
             avg_box_loss = util.AverageMeter()
@@ -160,7 +168,8 @@ def train(args, params):
 
 @torch.no_grad()
 def test(args, params, model=None):
-    dataset = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=True)
+    # dataset = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=False)
+    dataset = ZaloVPDataset("/home/quang/DATA/zalo_dataset", 640, params, augment=False)
 
     loader = data.DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4,
                              pin_memory=True)
@@ -183,7 +192,7 @@ def test(args, params, model=None):
     map50 = 0
     mean_ap = 0
     metrics = []
-    p_bar = tqdm.tqdm(loader, desc=('%10s' * 5) % ('', 'precision', 'recall', 'mAP50', 'mAP'))
+    p_bar = tqdm.tqdm(loader, desc=('%10s' * 5) % ('', 'precision', 'recall', 'mAP50', 'mAP'), dynamic_ncols=False, ncols=100)
     for samples, box_target, prompt, prompt_mask in p_bar:
         samples = samples.cuda()
         # samples = samples.half()  # uint8 to fp16/32
@@ -255,7 +264,7 @@ def main():
     parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--local-rank', default=0, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
-    parser.add_argument('--epochs', default=30, type=int)
+    parser.add_argument('--epochs', default=60, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
 

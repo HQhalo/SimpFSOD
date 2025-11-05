@@ -10,7 +10,7 @@ from torch.utils import data
 import glob
 import albumentations
 from utils import util
-
+import json
 
 class VPDataset(data.Dataset):
     def __init__(self, folder, input_size, params, augment):
@@ -61,13 +61,14 @@ class VPDataset(data.Dataset):
 
     def __getitem__(self, index):
         item = self.data[index]
-        query_img,  query_box = self.process_image(item["img"], item["box"], True)
-        prompt_img, prompt_box = self.process_image(item["prompt_img"], item["prompt_box"])
+        img, shape = self.load_image(item["img"], self.augment)
+        query_img,  query_box = self.process_image(img, shape, item["box"], self.augment)
+        img, shape = self.load_image(item["prompt_img"])
+        prompt_img, prompt_box = self.process_image(img, shape, item["prompt_box"])
         prompt_mask = self.vp_loader(prompt_img, prompt_box)
         return query_img,  query_box, prompt_img, prompt_mask
     
-    def process_image(self, filename, item_box, augment= False):
-        image, shape = self.load_image(filename, augment)
+    def process_image(self, image, shape, item_box, augment= False):
         h, w = image.shape[:2]
 
         # Resize
@@ -111,7 +112,7 @@ class VPDataset(data.Dataset):
     def __len__(self):
       return len(self.data)
     
-    def load_image(self, filename, augment):
+    def load_image(self, filename, augment=False):
         image = cv2.imread(filename)
         h, w = image.shape[:2]
         r = self.input_size / max(h, w)
@@ -125,7 +126,49 @@ class VPDataset(data.Dataset):
     def collate_fn(batch):
         return []
     
+class ZaloVPDataset(VPDataset):
+    def __init__(self, folder, input_size, params, augment):
+        super().__init__(folder, input_size, params, augment)
+    
+    def read_data(self, folder):
+        data = []
+        videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
 
+        with open(f"{folder}/data.json") as f:
+            frame_data = json.load(f)
+            
+        with open(f"{folder}/prompt_data.json") as f:
+            prompt_data = {}
+            for k, v in json.load(f).items():
+                nk = "/".join([k.split("/")[0][:-2]] + k.split("/")[1:])
+                prompt_data[nk] = v
+        
+        for video in videos:
+            video_path = os.path.join(folder, video)
+            imgs = glob.glob(f"{video_path}/*.jpg")
+            prompt = glob.glob(f"{video_path}/prompt/*.jpg")
+            
+            for img in imgs:
+                box_key =  "/".join(img.split("/")[-2:])
+                [x1, y1, x2, y2] = frame_data[box_key]
+                box = [-1] + [x1, y1, x2 - x1, y2- y1]
+
+                prompt_img = random.choice(prompt)
+                prompt_key =  "/".join([prompt_img.split("/")[-3][:-2]] + prompt_img.split("/")[-2:])
+                [x1, y1, x2, y2] = prompt_data[prompt_key]
+                prompt_box = [-1] + [x1, y1, x2 - x1, y2- y1]
+
+                data.append({
+                            "img": img,
+                            "box": numpy.array([box], dtype=float),
+                            "prompt_img": prompt_img,
+                            "prompt_box": numpy.array([prompt_box], dtype=float)
+                            })
+                    
+        return data
+    
+    def __getitem__(self, index):
+        return super().__getitem__(index)
 
 class LoadVisualPrompt:
     def __init__(self):
@@ -138,11 +181,11 @@ class LoadVisualPrompt:
 
         return ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))
     
-    def __call__(self, image, box):
+    def __call__(self, image, target_box):
         imgsz = image.shape[1:]
         masksz = (int(imgsz[0] * self.scale_factor), int(imgsz[1] * self.scale_factor))
 
-        box = util.xywh2xyxy(box) * torch.tensor(masksz)[[1, 0, 1, 0]]  # target boxes
+        box = util.xywh2xyxy(target_box) * torch.tensor(masksz)[[1, 0, 1, 0]]  # target boxes
         masks = self.make_mask(box, *masksz).float()
         
         return masks

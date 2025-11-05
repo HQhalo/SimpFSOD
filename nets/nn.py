@@ -285,7 +285,7 @@ class BNContrastiveHead(torch.nn.Module):
         super().__init__()
         self.norm = torch.nn.BatchNorm2d(embed_dims)
         # NOTE: use -10.0 to keep the init cls loss consistency with other losses
-        self.bias = torch.nn.Parameter(torch.tensor([-10.0]))
+        self.bias = torch.nn.Parameter(torch.tensor([-2.0]))
         # use -1.0 is more stable
         self.logit_scale = torch.nn.Parameter(-1.0 * torch.ones([]))
 
@@ -328,6 +328,7 @@ class Head(torch.nn.Module):
         self.savpe = SAVPE(filters, mid_ch, embed_dims)
         self.bn = torch.nn.ModuleList(BNContrastiveHead(embed_dims) for _ in filters)
         initialize_weights(self.savpe)
+        initialize_weights(self.emb)
 
     def get_vpe(self, prompt, prompt_mask):
         return self.savpe(prompt, prompt_mask)
