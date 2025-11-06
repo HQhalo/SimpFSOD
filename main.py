@@ -12,15 +12,18 @@ from torch.utils import data
 
 from nets import nn
 from utils import util
-from utils.dataset import VPDataset
+from utils.vp_dataset import VPDataset
 
 warnings.filterwarnings("ignore")
 
 
 
 def train(args, params):
+    device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    print(f"Using device: {device}")
+
     # Model
-    model = nn.load_model("/home/quang/CODE/SimpFSOD/v8.pt")
+    model = nn.load_model("/home/quang/CODE/SimpFSOD/v8_s.pt")
 
     for name, param in model.net.named_parameters():
         param.requires_grad = False
@@ -30,9 +33,6 @@ def train(args, params):
     model.cuda()
 
     # Optimizer
-    accumulate = max(round(64 / (args.batch_size * args.world_size)), 1)
-    params['weight_decay'] *= args.batch_size * args.world_size * accumulate / 64
-
     p = [], [], []
     for v in model.modules():
         if hasattr(v, 'bias') and isinstance(v.bias, torch.nn.Parameter):
@@ -48,7 +48,7 @@ def train(args, params):
     del p
 
     # EMA
-    ema = util.EMA(model) if args.local_rank == 0 else None
+    ema = util.EMA(model)
 
     # Dataset
     dataset = VPDataset("/home/quang/DATA/got10k/train", 640, params, augment=True)
@@ -60,14 +60,13 @@ def train(args, params):
 
     # Start training
     best = 0
-    amp_scale = torch.cuda.amp.GradScaler()
+    amp_scale = torch.amp.GradScaler()
     criterion = util.ComputeLoss(model, params)
     with open('weights/step.csv', 'w') as f:
-        if args.local_rank == 0:
-            writer = csv.DictWriter(f, fieldnames=['epoch',
-                                                     'box', 'cls', 'dfl',
-                                                     'Recall', 'Precision', 'mAP@50', 'mAP'])
-            writer.writeheader()
+        writer = csv.DictWriter(f, fieldnames=['epoch',
+                                                    'box', 'cls', 'dfl',
+                                                    'Recall', 'Precision', 'mAP@50', 'mAP'])
+        writer.writeheader()
         for epoch in range(args.epochs):
             model.train()
 
@@ -91,7 +90,7 @@ def train(args, params):
                 prompt_mask = prompt_mask.cuda()
 
                 # Forward
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device_type=device):
                     vpe = model.get_vpe(prompt, prompt_mask)
                     outputs = model(sample, vpe)  # forward
                 loss_box, loss_cls, loss_dfl = criterion(outputs, box)
@@ -108,8 +107,8 @@ def train(args, params):
                 amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
 
                 # Optimize
-                amp_scale.unscale_(optimizer)  # unscale gradients
-                util.clip_gradients(model)  # clip gradients
+                # amp_scale.unscale_(optimizer)  # unscale gradients
+                # util.clip_gradients(model)  # clip gradients
                 amp_scale.step(optimizer)  # optimizer.step
                 amp_scale.update()
                 optimizer.zero_grad()
@@ -163,11 +162,12 @@ def test(args, params, model=None):
     loader = data.DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4,
                              pin_memory=True)
 
-    plot = False
     if not model:
-        plot = True
-        model = torch.load(f='./weights/best.pt', map_location='cuda')
-        model = model['model'].float().fuse()
+        # model = torch.load(f='./weights/best.pt', map_location='cuda')
+        # model = model['model'].float().fuse()
+        model = nn.load_model("/home/quang/CODE/SimpFSOD/v8_s.pt")
+        model = model.cuda()
+
 
     # model.half()
     model.eval()
@@ -241,15 +241,14 @@ def profile(args, params):
     flops, num_params = thop.profile(model, inputs=[x, y], verbose=False)
     flops, num_params = thop.clever_format(nums=[2 * flops, num_params], format="%.3f")
 
-    if args.local_rank == 0:
-        print(f'Number of parameters: {num_params}')
-        print(f'Number of FLOPs: {flops}')
+    print(f'Number of parameters: {num_params}')
+    print(f'Number of FLOPs: {flops}')
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-size', default=640, type=int)
-    parser.add_argument('--batch-size', default=32, type=int)
-    parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--batch-size', default=64, type=int)
+    parser.add_argument('--epochs', default=30, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
 
@@ -263,7 +262,8 @@ def main():
 
     with open(os.path.join('utils', 'args.yaml'), errors='ignore') as f:
         params = yaml.safe_load(f)
-
+    
+    profile(args, params)
     if args.train:
         train(args, params)
     if args.test:
@@ -271,4 +271,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    model = nn.yolo_v8_s()
+    print(model.state_dict().keys())

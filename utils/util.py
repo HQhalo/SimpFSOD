@@ -78,6 +78,29 @@ def make_anchors(x, strides, offset=0.5):
         stride_tensor.append(torch.full((h * w, 1), stride, dtype=x[i].dtype, device=x[i].device))
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
+def compute_metric(output, target, iou_v):
+    # intersection(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
+    (a1, a2) = target[:, 1:].unsqueeze(1).chunk(2, 2)
+    (b1, b2) = output[:, :4].unsqueeze(0).chunk(2, 2)
+    intersection = (torch.min(a2, b2) - torch.max(a1, b1)).clamp(0).prod(2)
+    # IoU = intersection / (area1 + area2 - intersection)
+    iou = intersection / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - intersection + 1e-7)
+
+    correct = numpy.zeros((output.shape[0], iou_v.shape[0]))
+    correct = correct.astype(bool)
+    for i in range(len(iou_v)):
+        # IoU > threshold and classes match
+        x = torch.where((iou >= iou_v[i]) & (target[:, 0:1] == output[:, 5]))
+        if x[0].shape[0]:
+            matches = torch.cat((torch.stack(x, 1),
+                                 iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
+            if x[0].shape[0] > 1:
+                matches = matches[matches[:, 2].argsort()[::-1]]
+                matches = matches[numpy.unique(matches[:, 1], return_index=True)[1]]
+                matches = matches[numpy.unique(matches[:, 0], return_index=True)[1]]
+            correct[matches[:, 1].astype(int), i] = True
+    return torch.tensor(correct, dtype=torch.bool, device=output.device)
+
 
 def box_iou(box1, box2):
     # https://github.com/pytorch/vision/blob/master/torchvision/ops/boxes.py
@@ -368,6 +391,19 @@ class LinearLR:
     def step(self, step, optimizer):
         for param_group in optimizer.param_groups:
             param_group['lr'] = self.total_lr[step]
+
+
+class AverageMeter:
+    def __init__(self):
+        self.num = 0
+        self.sum = 0
+        self.avg = 0
+
+    def update(self, v, n):
+        if not math.isnan(float(v)):
+            self.num = self.num + n
+            self.sum = self.sum + v * n
+            self.avg = self.sum / self.num
 
 class Assigner(torch.nn.Module):
     def __init__(self, nc=80, top_k=13, alpha=1.0, beta=6.0, eps=1E-9):

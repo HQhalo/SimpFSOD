@@ -37,7 +37,7 @@ class Conv(torch.nn.Module):
     def __init__(self, in_ch, out_ch, k=1, s=1, p=None, d=1, g=1):
         super().__init__()
         self.conv = torch.nn.Conv2d(in_ch, out_ch, k, s, pad(k, p, d), d, g, False)
-        self.norm = torch.nn.BatchNorm2d(out_ch, 0.001, 0.03)
+        self.norm = torch.nn.BatchNorm2d(out_ch)
         self.relu = torch.nn.SiLU(inplace=True)
 
     def forward(self, x):
@@ -154,11 +154,11 @@ class SAVPE(torch.nn.Module):
     def __init__(self, filters, mid_ch, embed_dims):
         super().__init__()
 
-        self.sematic = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, mid_ch, torch.nn.SiLU(), 3, p=1), Conv(mid_ch, mid_ch, torch.nn.SiLU(), 3, p=1)) for x in filters)
+        self.sematic = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, mid_ch, 3), Conv(mid_ch, mid_ch, 3)) for x in filters)
         self.sematic[1].append(torch.nn.Upsample(scale_factor=2))
         self.sematic[2].append(torch.nn.Upsample(scale_factor=4))
         
-        self.activation = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, mid_ch, torch.nn.SiLU(), 1)) for x in filters)
+        self.activation = torch.nn.ModuleList(torch.nn.Sequential(Conv(x, mid_ch, 1)) for x in filters)
         self.activation[1].append(torch.nn.Upsample(scale_factor=2))
         self.activation[2].append(torch.nn.Upsample(scale_factor=4))
         
@@ -166,7 +166,7 @@ class SAVPE(torch.nn.Module):
         self.cv3 = torch.nn.Conv2d(3 * mid_ch, embed_dims, 1)
         self.cv4 = torch.nn.Conv2d(3 * mid_ch, self.c, 3, padding=1)
         self.cv5 = torch.nn.Conv2d(1, self.c, 3, padding=1)
-        self.cv6 = torch.nn.Sequential(Conv(2 * self.c, self.c, torch.nn.SiLU(), 3, p=1), torch.nn.Conv2d(self.c, self.c, 3, padding=1))
+        self.cv6 = torch.nn.Sequential(Conv(2 * self.c, self.c, 3), torch.nn.Conv2d(self.c, self.c, 3, padding=1))
 
     def forward(self, x, vp):
         y = [self.activation[i](xi) for i, xi in enumerate(x)]
@@ -301,10 +301,10 @@ class YOLO(torch.nn.Module):
         self.stride = self.head.stride
         self.head.initialize_biases()
 
-    def forward(self, x):
+    def forward(self, x, vpe):
         x = self.net(x)
         x = self.fpn(x)
-        return self.head(list(x))
+        return self.head(list(x), vpe)
     
     def get_vpe(self, p, p_mask):
         p = self.net(p)

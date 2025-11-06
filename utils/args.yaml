@@ -1,13 +1,13 @@
-lr0: 0.010                    # initial learning rate (SGD=1E-2, Adam=1E-3)
-lrf: 0.010                    # final OneCycleLR learning rate (lr0 * lrf)
+min_lr: 0.000050000000             # initial learning rate
+max_lr: 0.001000000000            # maximum learning rate
 momentum: 0.93700000          # SGD momentum/Adam beta1
 weight_decay: 0.0005          # optimizer weight decay 5e-4
-warmup_epochs: 3.000          # warmup epochs
+warmup_epochs: 2.000          # warmup epochs
 warmup_momentum: 0.8          # warmup initial momentum
 warmup_bias_lr: 0.10          # warmup initial bias lr
-box: 7.5                      # box loss gain
+box: 5.0                      # box loss gain
 cls: 0.5                      # cls loss gain
-dfl: 1.5                      # cls loss gain
+dfl: 1.0                     # cls loss gain
 hsv_h: 0.015000               # image HSV-Hue augmentation (fraction)
 hsv_s: 0.700000               # image HSV-Saturation augmentation (fraction)
 hsv_v: 0.400000               # image HSV-Value augmentation (fraction)
