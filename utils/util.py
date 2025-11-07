@@ -282,7 +282,7 @@ def compute_ap(tp, conf, output, target, eps=1E-16):
     return tp, fp, m_pre, m_rec, map50, mean_ap
 
 def strip_optimizer(filename):
-    x = torch.load(filename, map_location=torch.device('cpu'))
+    x = torch.load(filename, map_location=torch.device('cpu'), weights_only=False)
     x['model'].half()  # to FP16
     for p in x['model'].parameters():
         p.requires_grad = False

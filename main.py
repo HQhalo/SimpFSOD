@@ -12,7 +12,7 @@ import thop
 
 from nets import nn, loss
 from utils import util
-from dataset.dataset import VPDataset
+from dataset.dataset import VPDataset, ZaloVPDataset
 
 warnings.filterwarnings("ignore")
 
@@ -23,12 +23,20 @@ def train(args, params):
     print(f"Using device: {device}")
 
     # Model
-    model = nn.load_model("/home/quang/CODE/SimpFSOD/v8_s.pt")
+    model = nn.load_model("/home/quang/CODE/SimpFSOD/yoloe-v8s-pretrained.pt")
 
     for name, param in model.net.named_parameters():
         param.requires_grad = False
     for name, param in model.fpn.named_parameters():
         param.requires_grad = False
+    for name, param in model.head.box.named_parameters():
+        param.requires_grad = False
+
+    # for name, param in model.named_parameters():
+    #     if not name.startswith("head.savpe"):
+    #         param.requires_grad = False
+    
+    print(params)
 
     model.cuda()
 
@@ -53,10 +61,22 @@ def train(args, params):
     # Dataset
     dataset = VPDataset("/home/quang/DATA/got10k/train", 640, params, augment=True)
     loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True)
+    
+    dataset_test = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=False)
+    loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4, pin_memory=True)
+
+    # folder = "/home/quang/DATA/zalo_dataset"
+    # videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
+    # dataset = ZaloVPDataset(folder, 640, params, augment=True, videos=videos[:-2])
+    # loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True)
+
+    # dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
+    # loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
+    #                          pin_memory=True)
 
     # Scheduler
     num_steps = len(loader)
-    scheduler = util.LinearLR(args, params, num_steps)
+    scheduler = util.CosineLR(args, params, num_steps)
 
     # Start training
     best = 0
@@ -123,7 +143,7 @@ def train(args, params):
 
 
             # mAP
-            last = test(args, params, ema.ema)
+            last = test(args, params, ema.ema, loader_test)
 
             writer.writerow({'epoch': str(epoch + 1).zfill(3),
                                 'box': str(f'{avg_box_loss.avg:.3f}'),
@@ -155,17 +175,18 @@ def train(args, params):
 
 
 @torch.no_grad()
-def test(args, params, model=None):
-    dataset = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=False)
-    # dataset = ZaloVPDataset("/home/quang/DATA/zalo_dataset", 640, params, augment=False)
-
-    loader = data.DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4,
-                             pin_memory=True)
+def test(args, params, model=None, loader=None):
+    if loader == None:
+        folder = "/home/quang/DATA/zalo_dataset"
+        videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
+        dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
+        loader = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
+                                pin_memory=True)
 
     if not model:
         # model = torch.load(f='./weights/best.pt', map_location='cuda')
         # model = model['model'].float().fuse()
-        model = nn.load_model("/home/quang/CODE/SimpFSOD/v8_s.pt")
+        model = nn.load_model("/home/quang/CODE/SimpFSOD/weights/best.pt")
         model = model.cuda()
 
 
@@ -200,7 +221,7 @@ def test(args, params, model=None):
         vpe = model.get_vpe(prompt, prompt_mask)
         outputs = model(samples, vpe) 
         # NMS
-        outputs = util.non_max_suppression(outputs)
+        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.3)
         # Metrics
         for i, output in enumerate(outputs):
             cls = torch.zeros(1,1).cuda()
@@ -247,7 +268,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-size', default=640, type=int)
     parser.add_argument('--batch-size', default=64, type=int)
-    parser.add_argument('--epochs', default=30, type=int)
+    parser.add_argument('--epochs', default=4, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
 

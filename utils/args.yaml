@@ -1,8 +1,8 @@
-min_lr: 0.000050000000             # initial learning rate
-max_lr: 0.001000000000            # maximum learning rate
+min_lr: 0.00001000000             # initial learning rate
+max_lr: 0.00100000000            # maximum learning rate
 momentum: 0.93700000          # SGD momentum/Adam beta1
 weight_decay: 0.0005          # optimizer weight decay 5e-4
-warmup_epochs: 2.000          # warmup epochs
+warmup_epochs: 1.000          # warmup epochs
 warmup_momentum: 0.8          # warmup initial momentum
 warmup_bias_lr: 0.10          # warmup initial bias lr
 box: 5.0                      # box loss gain

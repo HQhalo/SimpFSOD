@@ -79,13 +79,13 @@ class VPDataset(data.Dataset):
       return len(self.data)
     
 class ZaloVPDataset(VPDataset):
-    def __init__(self, folder, input_size, params, augment):
+    def __init__(self, folder, input_size, params, augment, videos):
+        self.cache = {}
+        self.videos = videos
         super().__init__(folder, input_size, params, augment)
     
     def read_data(self, folder):
         data = []
-        videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
-
         with open(f"{folder}/data.json") as f:
             frame_data = json.load(f)
             
@@ -95,7 +95,7 @@ class ZaloVPDataset(VPDataset):
                 nk = "/".join([k.split("/")[0][:-2]] + k.split("/")[1:])
                 prompt_data[nk] = v
         
-        for video in videos:
+        for video in self.videos:
             video_path = os.path.join(folder, video)
             imgs = glob.glob(f"{video_path}/*.jpg")
             prompt = glob.glob(f"{video_path}/prompt/*.jpg")
@@ -120,7 +120,21 @@ class ZaloVPDataset(VPDataset):
         return data
     
     def __getitem__(self, index):
-        return super().__getitem__(index)
+        item = self.data[index]
+
+        # query
+        query_img = self.load_image(item["img"])
+        query_img, query_box = self.letter_box(query_img, item["box"], augment=True, coco_fotmat=True)
+        
+        # prompt
+        if item["prompt_img"] not in self.cache:
+            prompt_img = self.load_image(item["prompt_img"])
+            prompt_img, prompt_box = self.letter_box(prompt_img, item["prompt_box"], augment=False, coco_fotmat=True)
+            prompt_mask = self.vp_loader(prompt_img, prompt_box)
+            self.cache[item["prompt_img"]] = (prompt_img, prompt_mask)
+
+        (prompt_img, prompt_mask) = self.cache[item["prompt_img"]]            
+        return query_img, query_box , prompt_img, prompt_mask
 
 class LoadVisualPrompt:
     def __init__(self):

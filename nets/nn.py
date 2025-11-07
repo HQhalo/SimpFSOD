@@ -391,8 +391,8 @@ def yolo_v8_x():
 def load_model(model_path):
     model = yolo_v8_s()
     weights = torch.load(model_path, weights_only=False)
-    pretrained_state_dict = weights['model'].state_dict()
-    new_state_dict = {k: v for k, v in pretrained_state_dict.items() if not k.startswith('head.cls')}
+    pretrained_state_dict = weights.state_dict()
+    # new_state_dict = {k: v for k, v in pretrained_state_dict.items() if not k.startswith('head.cls')}
 
-    model.load_state_dict(new_state_dict, strict=False)
+    model.load_state_dict(pretrained_state_dict, strict=False)
     return model
