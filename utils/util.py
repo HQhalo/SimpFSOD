@@ -686,5 +686,7 @@ def initialize_weights(model):
             if m.bias is not None:
                 torch.nn.init.constant_(m.bias, 0.0)
         elif t is torch.nn.BatchNorm2d:
+            m.eps = 1e-3
+            m.momentum = 0.03
             torch.nn.init.constant_(m.weight, 1.0)
             torch.nn.init.constant_(m.bias, 0.0)

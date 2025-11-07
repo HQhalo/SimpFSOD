@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from utils.util import make_anchors
+from utils.util import make_anchors, initialize_weights
 
 
 def pad(k, p=None, d=1):
@@ -338,6 +338,7 @@ class YOLO(torch.nn.Module):
         self.head.stride = torch.tensor([256 / x.shape[-2] for x in self.forward(img_dummy, vpe_dummy)])
         self.stride = self.head.stride
         self.head.initialize_biases()
+        initialize_weights(self)
 
     def forward(self, x, vpe):
         x = self.net(x)
