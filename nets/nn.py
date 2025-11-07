@@ -129,13 +129,13 @@ class DarkNet(torch.nn.Module):
         super().__init__()
         p1 = [Conv(width[0], width[1], 3, 2)]
         p2 = [Conv(width[1], width[2], 3, 2),
-              C2f(width[2], width[2], depth[0])]
+              C2f(width[2], width[2], depth[0], True)]
         p3 = [Conv(width[2], width[3], 3, 2),
-              C2f(width[3], width[3], depth[1])]
+              C2f(width[3], width[3], depth[1], True)]
         p4 = [Conv(width[3], width[4], 3, 2),
-              C2f(width[4], width[4], depth[2])]
+              C2f(width[4], width[4], depth[2], True)]
         p5 = [Conv(width[4], width[5], 3, 2),
-              C2f(width[5], width[5], depth[0]),
+              C2f(width[5], width[5], depth[0], True),
               SPP(width[5], width[5])]
 
         self.p1 = torch.nn.Sequential(*p1)
