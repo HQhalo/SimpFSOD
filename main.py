@@ -4,15 +4,15 @@ import csv
 import os
 import warnings
 
-import numpy
 import torch
 import tqdm
 import yaml
 from torch.utils import data
+import thop
 
-from nets import nn
+from nets import nn, loss
 from utils import util
-from utils.vp_dataset import VPDataset
+from dataset.dataset import VPDataset
 
 warnings.filterwarnings("ignore")
 
@@ -61,7 +61,7 @@ def train(args, params):
     # Start training
     best = 0
     amp_scale = torch.amp.GradScaler()
-    criterion = util.ComputeLoss(model, params)
+    criterion = loss.ComputeLoss(model, params)
     with open('weights/step.csv', 'w') as f:
         writer = csv.DictWriter(f, fieldnames=['epoch',
                                                     'box', 'cls', 'dfl',
@@ -73,9 +73,9 @@ def train(args, params):
             if args.epochs - epoch == 10:
                 loader.dataset.mosaic = False
 
-            avg_box_loss = util.AverageMeter()
-            avg_cls_loss = util.AverageMeter()
-            avg_dfl_loss = util.AverageMeter()
+            avg_box_loss = loss.AverageMeter()
+            avg_cls_loss = loss.AverageMeter()
+            avg_dfl_loss = loss.AverageMeter()
             optimizer.zero_grad()
 
             p_bar = enumerate(loader)
@@ -229,7 +229,6 @@ def test(args, params, model=None):
     return mean_ap, map50, m_rec, m_pre
 
 def profile(args, params):
-    import thop
     shape = (1, 3, args.input_size, args.input_size)
     model = nn.yolo_v8_s().fuse()
 
@@ -271,6 +270,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    model = nn.yolo_v8_s()
-    print(model.state_dict().keys())
+    main()
