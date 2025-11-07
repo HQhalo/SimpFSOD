@@ -2,7 +2,6 @@ import os
 import random
 
 from dataset.resize import LetterBox
-from dataset.transform import Transform
 import numpy
 import torch
 from torch.utils import data
@@ -19,8 +18,7 @@ class VPDataset(data.Dataset):
         self.input_size = input_size
         
         self.vp_loader = LoadVisualPrompt()
-        self.transform = Transform(params)
-        self.letter_box = LetterBox(input_size)
+        self.letter_box = LetterBox(input_size, params)
 
         self.data = self.read_data(folder)
         
@@ -65,15 +63,11 @@ class VPDataset(data.Dataset):
 
         # query
         query_img = self.load_image(item["img"])
-        query_img, query_box = self.letter_box(query_img, item["box"], coco_fotmat=True)
-        if self.augment:
-            query_img, query_box = self.transform(query_img, query_box)
-            query_img, query_box = torch.from_numpy(query_img), torch.from_numpy(query_box)
+        query_img, query_box = self.letter_box(query_img, item["box"], augment=True, coco_fotmat=True)
         
         # prompt
         prompt_img = self.load_image(item["prompt_img"])
-        prompt_img, prompt_box = self.letter_box(prompt_img, item["prompt_box"], coco_fotmat=True)
-        prompt_img, prompt_box = torch.from_numpy(prompt_img), torch.from_numpy(prompt_box)
+        prompt_img, prompt_box = self.letter_box(prompt_img, item["prompt_box"], augment=False, coco_fotmat=True)
         prompt_mask = self.vp_loader(prompt_img, prompt_box)
 
         return query_img, query_box , prompt_img, prompt_mask

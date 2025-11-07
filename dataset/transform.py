@@ -3,42 +3,6 @@ import random
 
 import cv2
 import numpy
-import albumentations
-
-class Transform():
-    def __init__(self, params):
-        self.params = params
-        transforms = [albumentations.Blur(p=0.01),
-                        albumentations.CLAHE(p=0.01),
-                        albumentations.ToGray(p=0.01),
-                        albumentations.MedianBlur(p=0.01)]
-        self.transform = albumentations.Compose(transforms)
-
-    def __call__(self, image, label):
-        new_image, new_label = random_perspective(image.copy(), label.copy(), self.params)
-        if len(new_label) > 0:
-            image, label = new_image, new_label
-
-        # Albumentations
-        image, box = self.albumentations(image, box)
-        # HSV color-space
-        augment_hsv(image, self.params)
-        # Flip up-down
-        if random.random() < self.params['flip_ud']:
-            image = numpy.flipud(image)
-            box[:, 1] = 1 - box[:, 1]
-        # Flip left-right
-        if random.random() < self.params['flip_lr']:
-            image = numpy.fliplr(image)
-            box[:, 0] = 1 - box[:, 0] 
-        return image, box
-    
-    def albumentations(self, image, box):
-        x = self.transform(image=image,
-                            bboxes=box)
-        image = x['image']
-        box = numpy.array(x['bboxes'])
-        return image, box
 
 def augment_hsv(image, params):
     # HSV color-space augmentation

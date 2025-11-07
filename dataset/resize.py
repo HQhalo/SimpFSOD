@@ -1,7 +1,9 @@
 import cv2
 import numpy
-import torch
 import random
+import albumentations
+import torch
+from dataset.transform import augment_hsv, random_perspective
 
 def resample():
     choices = (cv2.INTER_AREA,
@@ -12,10 +14,16 @@ def resample():
     return random.choice(seq=choices)
 
 class LetterBox():
-    def __init__(self, input_size):
+    def __init__(self, input_size, params={}):
         self.input_size = input_size
+        self.params = params
+        transforms = [albumentations.Blur(p=0.01),
+                        albumentations.CLAHE(p=0.01),
+                        albumentations.ToGray(p=0.01),
+                        albumentations.MedianBlur(p=0.01)]
+        self.transform = albumentations.Compose(transforms)
 
-    def __call__(self, org_image, org_label, coco_fotmat = False, augment=False):
+    def __call__(self, image, org_label, augment = False, coco_fotmat = False):
         """
         Resizes and pads an image for object detection
         Args:
@@ -24,28 +32,51 @@ class LetterBox():
                                             set coco_fotmat = True to use COCO format
 
         Returns: 
-            image (np.ndarray): RGB format [input_size, input_size, 3]
+            image (np.ndarray): RGB format, size: [3, h, w]
             box (np.ndarray):   YOLO format
         """
-        h, w = org_image.shape[:2]
+        h, w = image.shape[:2]
         label = org_label.copy()
         if coco_fotmat:
             label[:,1:] = coco2wh(label[:, 1:], w, h)
 
-        # Resize
-        image, ratio, pad = self.resize(org_image, self.input_size, augment)
-        if label.size:
-            label[:, 1:] = wh2xy(label[:, 1:], ratio[0] * w, ratio[1] * h, pad[0], pad[1])
+        box = label[:,1:] 
+        if augment:
+            # Albumentations
+            image, box = self.albumentations(image, box)
+            # HSV color-space
+            augment_hsv(image, self.params)
+            # Flip up-down
+            if random.random() < self.params['flip_ud']:
+                image = numpy.flipud(image)
+                box[:, 1] = 1 - box[:, 1]
+            # Flip left-right
+            if random.random() < self.params['flip_lr']:
+                image = numpy.fliplr(image)
+                box[:, 0] = 1 - box[:, 0]
 
-        box = label[:, 1:5]
+        # Resize
+        image, ratio, pad = self.resize(image, self.input_size, augment)
+        box = wh2xy(box, ratio[0] * w, ratio[1] * h, pad[0], pad[1])
+        if augment:
+            new_image, new_label = random_perspective(image.copy(), label.copy(), self.params)
+            if len(new_label) > 0:
+                image, label = new_image, new_label        
         box = xy2wh(box, self.input_size, self.input_size)
 
         # Convert HWC to CHW, BGR to RGB
         sample = image.transpose((2, 0, 1))[::-1]
         sample = numpy.ascontiguousarray(sample)
 
-        return sample, box
-
+        return torch.from_numpy(sample), torch.from_numpy(box)
+    
+    def albumentations(self, image, box):
+        x = self.transform(image=image,
+                            bboxes=box)
+        image = x['image']
+        box = numpy.array(x['bboxes'])
+        return image, box
+    
     def resize(self, image, input_size, augment):
         # Resize and pad image while meeting stride-multiple constraints
         shape = image.shape[:2]  # current shape [height, width]
