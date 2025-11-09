@@ -2,7 +2,7 @@ import math
 
 import torch
 from torch.nn.functional import cross_entropy
-from utils.util import xywh2xyxy, make_anchors
+from utils.util import make_anchors
 
 class ComputeLoss:
     def __init__(self, model, params):
@@ -36,15 +36,7 @@ class ComputeLoss:
         x2y2 = anchor_points + rb
         return torch.cat(tensors=(x1y1, x2y2), dim=-1)
 
-    def preprocess(self, box, batch_size, scale_tensor):
-        if box.shape[0] == 0:
-            out = torch.zeros(batch_size, 0, 5, device=self.device)
-        else:
-            out = torch.zeros(batch_size, 1, 5, device=self.device)
-            out[..., 1:5] = xywh2xyxy(box[..., 0:4].mul_(scale_tensor))
-        return out
-
-    def __call__(self, outputs, box):
+    def __call__(self, outputs, targets):
         x = torch.cat([i.view(outputs[0].shape[0], self.no, -1) for i in outputs], dim=2)
         pred_distri, pred_scores = x.split(split_size=(self.reg_max * 4, self.nc), dim=1)
 
@@ -56,9 +48,33 @@ class ComputeLoss:
         input_size = torch.tensor(outputs[0].shape[2:], device=self.device, dtype=data_type) * self.stride[0]
         anchor_points, stride_tensor = make_anchors(outputs, self.stride, offset=0.5)
 
-        gt = self.preprocess(box.to(self.device).clone(), batch_size, input_size[[1, 0, 1, 0]])
+        idx = targets['idx'].view(-1, 1)
+        cls = targets['cls'].view(-1, 1)
+        box = targets['box']
+
+        targets = torch.cat((idx, cls, box), dim=1).to(self.device)
+        if targets.shape[0] == 0:
+            gt = torch.zeros(batch_size, 0, 5, device=self.device)
+        else:
+            i = targets[:, 0]
+            _, counts = i.unique(return_counts=True)
+            counts = counts.to(dtype=torch.int32)
+            gt = torch.zeros(batch_size, counts.max(), 5, device=self.device)
+            for j in range(batch_size):
+                matches = i == j
+                n = matches.sum()
+                if n:
+                    gt[j, :n] = targets[matches, 1:]
+            x = gt[..., 1:5].mul_(input_size[[1, 0, 1, 0]])
+            y = torch.empty_like(x)
+            dw = x[..., 2] / 2  # half-width
+            dh = x[..., 3] / 2  # half-height
+            y[..., 0] = x[..., 0] - dw  # top left x
+            y[..., 1] = x[..., 1] - dh  # top left y
+            y[..., 2] = x[..., 0] + dw  # bottom right x
+            y[..., 3] = x[..., 1] + dh  # bottom right y
+            gt[..., 1:5] = y
         gt_labels, gt_bboxes = gt.split((1, 4), 2)
-        gt_labels = gt_labels.long()
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
 
         pred_bboxes = self.box_decode(anchor_points, pred_distri)
@@ -88,7 +104,7 @@ class ComputeLoss:
         loss_dfl *= self.params['dfl']  # dfl gain
 
         return loss_box, loss_cls, loss_dfl
-
+    
 class Assigner(torch.nn.Module):
     def __init__(self, nc=80, top_k=13, alpha=1.0, beta=6.0, eps=1E-9):
         super().__init__()
@@ -183,67 +199,6 @@ class Assigner(torch.nn.Module):
 
         return target_bboxes, target_scores, fg_mask.bool()
 
-
-class QFL(torch.nn.Module):
-    def __init__(self, beta=2.0):
-        super().__init__()
-        self.beta = beta
-        self.bce_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
-
-    def forward(self, outputs, targets):
-        bce_loss = self.bce_loss(outputs, targets)
-        return torch.pow(torch.abs(targets - outputs.sigmoid()), self.beta) * bce_loss
-
-
-class VFL(torch.nn.Module):
-    def __init__(self, alpha=0.75, gamma=2.00, iou_weighted=True):
-        super().__init__()
-        assert alpha >= 0.0
-        self.alpha = alpha
-        self.gamma = gamma
-        self.iou_weighted = iou_weighted
-        self.bce_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
-
-    def forward(self, outputs, targets):
-        assert outputs.size() == targets.size()
-        targets = targets.type_as(outputs)
-
-        if self.iou_weighted:
-            focal_weight = targets * (targets > 0.0).float() + \
-                           self.alpha * (outputs.sigmoid() - targets).abs().pow(self.gamma) * \
-                           (targets <= 0.0).float()
-
-        else:
-            focal_weight = (targets > 0.0).float() + \
-                           self.alpha * (outputs.sigmoid() - targets).abs().pow(self.gamma) * \
-                           (targets <= 0.0).float()
-
-        return self.bce_loss(outputs, targets) * focal_weight
-
-
-class FocalLoss(torch.nn.Module):
-    def __init__(self, alpha=0.25, gamma=1.5):
-        super().__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.bce_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
-
-    def forward(self, outputs, targets):
-        loss = self.bce_loss(outputs, targets)
-
-        if self.alpha > 0:
-            alpha_factor = targets * self.alpha + (1 - targets) * (1 - self.alpha)
-            loss *= alpha_factor
-
-        if self.gamma > 0:
-            outputs_sigmoid = outputs.sigmoid()
-            p_t = targets * outputs_sigmoid + (1 - targets) * (1 - outputs_sigmoid)
-            gamma_factor = (1.0 - p_t) ** self.gamma
-            loss *= gamma_factor
-
-        return loss
-
-
 class BoxLoss(torch.nn.Module):
     def __init__(self, dfl_ch):
         super().__init__()
@@ -303,7 +258,6 @@ def compute_iou(box1, box2, eps=1e-7):
     with torch.no_grad():
         alpha = v / (v - iou + (1 + eps))
     return iou - (rho2 / c2 + v * alpha)  # CIoU
-
 
 class AverageMeter:
     def __init__(self):

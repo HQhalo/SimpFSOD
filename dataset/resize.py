@@ -41,6 +41,7 @@ class LetterBox():
             label[:,1:] = coco2wh(label[:, 1:], w, h)
 
         box = label[:,1:] 
+        cls = label[:,:1] 
         if augment:
             # Albumentations
             image, box = self.albumentations(image, box)
@@ -67,8 +68,8 @@ class LetterBox():
         # Convert HWC to CHW, BGR to RGB
         sample = image.transpose((2, 0, 1))[::-1]
         sample = numpy.ascontiguousarray(sample)
-
-        return torch.from_numpy(sample), torch.from_numpy(box)
+        
+        return torch.from_numpy(sample), torch.from_numpy(box), torch.from_numpy(cls)
     
     def albumentations(self, image, box):
         x = self.transform(image=image,

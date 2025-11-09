@@ -265,10 +265,10 @@ class Head(torch.nn.Module):
     anchors = torch.empty(0)
     strides = torch.empty(0)
 
-    def __init__(self, filters=(), embed_dims=512):
+    def __init__(self, filters=(), embed_dims=512, number_class=1):
         super().__init__()
         self.ch = 16  # DFL channels
-        self.nc = 1
+        self.nc = number_class
         self.nl = len(filters)  # number of detection layers
         self.no = self.nc + self.ch * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
@@ -300,7 +300,28 @@ class Head(torch.nn.Module):
 
     def forward(self, x, vpe):
         for i, (box, emb, bn) in enumerate(zip(self.box, self.emb, self.bn)):
-            x[i] = torch.cat(tensors=(box(x[i]), bn(emb(x[i]) , vpe)), dim=1)
+            emb_tmp = emb(x[i])
+            bn_tmp = bn(emb_tmp, vpe)
+            x[i] = torch.cat(tensors=(box(x[i]), bn_tmp), dim=1)
+        if self.training:
+            return x
+
+        self.anchors, self.strides = (i.transpose(0, 1) for i in make_anchors(x, self.stride))
+        x = torch.cat([i.view(x[0].shape[0], self.no , -1) for i in x], dim=2)
+        box, cls = x.split(split_size=(4 * self.ch, self.nc), dim=1)
+
+        a, b = self.dfl(box).chunk(2, 1)
+        a = self.anchors.unsqueeze(0) - a
+        b = self.anchors.unsqueeze(0) + b
+        box = torch.cat(tensors=((a + b) / 2, b - a), dim=1)
+
+        return torch.cat(tensors=(box * self.strides, cls.sigmoid()), dim=1)
+
+    def get_box(self, x):
+        for i, box in enumerate(self.box):
+            tmp = box(x[i])
+            B, _, W, H = tmp.shape
+            x[i] = torch.cat(tensors=(tmp, torch.rand([B, 1, W, H]).to(x[i].device)), dim=1)
         if self.training:
             return x
 
@@ -326,7 +347,7 @@ class Head(torch.nn.Module):
 
 
 class YOLO(torch.nn.Module):
-    def __init__(self, width, depth, embed_dims=512):
+    def __init__(self, width, depth, embed_dims=512, number_class=1):
         super().__init__()
         self.net = DarkNet(width, depth)
         self.fpn = DarkFPN(width, depth)
@@ -334,7 +355,7 @@ class YOLO(torch.nn.Module):
         img_dummy = torch.zeros(1, width[0], 256, 256)
         vpe_dummy = torch.zeros(1, 1, embed_dims)
 
-        self.head = Head((width[3], width[4], width[5]), embed_dims)
+        self.head = Head((width[3], width[4], width[5]), embed_dims, number_class=number_class)
         self.head.stride = torch.tensor([256 / x.shape[-2] for x in self.forward(img_dummy, vpe_dummy)])
         self.stride = self.head.stride
         self.head.initialize_biases()
@@ -345,6 +366,12 @@ class YOLO(torch.nn.Module):
         x = self.fpn(x)
         return self.head(list(x), vpe)
     
+    def forward_non_cross(self, x, p_mask):
+        x = self.net(x)
+        x = self.fpn(x)
+        vpe = self.head.get_vpe(x, p_mask) 
+        return self.head(list(x), vpe)
+
     def get_vpe(self, p, p_mask):
         p = self.net(p)
         p = self.fpn(p)
@@ -359,37 +386,37 @@ class YOLO(torch.nn.Module):
         return self
 
 
-def yolo_v8_n():
+def yolo_v8_n(number_class=1):
     depth = [1, 2, 2]
     width = [3, 16, 32, 64, 128, 256]
-    return YOLO(width, depth)
+    return YOLO(width, depth, number_class=number_class)
 
 
-def yolo_v8_s():
+def yolo_v8_s(number_class=1):
     depth = [1, 2, 2]
     width = [3, 32, 64, 128, 256, 512]
-    return YOLO(width, depth)
+    return YOLO(width, depth, number_class=number_class)
 
 
-def yolo_v8_m():
+def yolo_v8_m(number_class=1):
     depth = [2, 4, 4]
     width = [3, 48, 96, 192, 384, 576]
-    return YOLO(width, depth)
+    return YOLO(width, depth, number_class=number_class)
 
 
-def yolo_v8_l():
+def yolo_v8_l(number_class=1):
     depth = [3, 6, 6]
     width = [3, 64, 128, 256, 512, 512]
-    return YOLO(width, depth)
+    return YOLO(width, depth, number_class=number_class)
 
 
-def yolo_v8_x():
+def yolo_v8_x(number_class=1):
     depth = [3, 6, 6]
     width = [3, 80, 160, 320, 640, 640]
-    return YOLO(width, depth)
+    return YOLO(width, depth, number_class=number_class)
 
-def load_model(model_path):
-    model = yolo_v8_s()
+def load_model(model_path, number_class=1):
+    model = yolo_v8_s(number_class)
     weights = torch.load(model_path, weights_only=False)
     pretrained_state_dict = weights.state_dict()
     # new_state_dict = {k: v for k, v in pretrained_state_dict.items() if not k.startswith('head.cls')}

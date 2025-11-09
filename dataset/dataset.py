@@ -33,7 +33,7 @@ class VPDataset(data.Dataset):
                 lines = file.readlines()
             for img in imgs:
                 i = int(img.split("/")[-1].split(".")[0]) - 1
-                boxes[img] = [-1] + [float(v) for v in lines[i].strip().split(",")]
+                boxes[img] = [0] + [float(v) for v in lines[i].strip().split(",")]
             
             prompt_imgs = self.top_k_boxes(boxes)
             for img, box in boxes.items():
@@ -63,11 +63,11 @@ class VPDataset(data.Dataset):
 
         # query
         query_img = self.load_image(item["img"])
-        query_img, query_box = self.letter_box(query_img, item["box"], augment=True, coco_fotmat=True)
+        query_img, query_box, _ = self.letter_box(query_img, item["box"], augment=self.augment, coco_fotmat=True)
         
         # prompt
         prompt_img = self.load_image(item["prompt_img"])
-        prompt_img, prompt_box = self.letter_box(prompt_img, item["prompt_box"], augment=False, coco_fotmat=True)
+        prompt_img, prompt_box, _ = self.letter_box(prompt_img, item["prompt_box"], augment=False, coco_fotmat=True)
         prompt_mask = self.vp_loader(prompt_img, prompt_box)
 
         return query_img, query_box , prompt_img, prompt_mask
@@ -103,12 +103,12 @@ class ZaloVPDataset(VPDataset):
             for img in imgs:
                 box_key =  "/".join(img.split("/")[-2:])
                 [x1, y1, x2, y2] = frame_data[box_key]
-                box = [-1] + [x1, y1, x2 - x1, y2- y1]
+                box = [0, x1, y1, x2 - x1, y2- y1]
 
                 prompt_img = random.choice(prompt)
                 prompt_key =  "/".join([prompt_img.split("/")[-3][:-2]] + prompt_img.split("/")[-2:])
                 [x1, y1, x2, y2] = prompt_data[prompt_key]
-                prompt_box = [-1] + [x1, y1, x2 - x1, y2- y1]
+                prompt_box = [0, x1, y1, x2 - x1, y2- y1]
 
                 data.append({
                             "img": img,
@@ -136,9 +136,76 @@ class ZaloVPDataset(VPDataset):
         (prompt_img, prompt_mask) = self.cache[item["prompt_img"]]            
         return query_img, query_box , prompt_img, prompt_mask
 
+class VisDroneDataset(data.Dataset):
+    def __init__(self, folder, input_size, params, augment, nc=1):
+        self.params = params
+        self.mosaic = augment
+        self.augment = augment
+        self.input_size = input_size
+        
+        self.vp_loader = LoadVisualPrompt(nc)
+        self.letter_box = LetterBox(input_size, params)
+
+        self.data = self.read_data(folder)
+
+    def read_data(self, folder):
+        data = []
+        annotations_files = glob.glob(f"{folder}/annotations/*.txt")
+        annotations_dict = {}
+        for annotations_file in annotations_files:
+            file_id = annotations_file.split("/")[-1].split(".")[0]
+            with open(annotations_file) as file:
+                lines = file.readlines()
+                lines = [line.strip().split(",") for line in lines]
+                boxes = []
+                for line in lines:
+                    [x,y,w,h,score,cls,truncation,occlusion ] = [int(i) for i in line[:8]]
+                    if score == 0 or occlusion == 2 or cls == 11:
+                        continue 
+                    boxes.append([cls, x,y,w,h]) 
+                if len(boxes) != 0:
+                    annotations_dict[file_id] = boxes
+
+        for file_id, annotations in annotations_dict.items():
+            data.append({
+                        "img": f"{folder}/images/{file_id}.jpg",
+                        "box": numpy.array(annotations, dtype=float)
+                    })
+        return data
+    def __getitem__(self, index):
+        item = self.data[index]
+        img = self.load_image(item["img"])
+        img, box, cls = self.letter_box(img, item["box"], augment=self.augment, coco_fotmat=True)
+        prompt_mask = self.vp_loader(img, box, cls)
+        return img, box, cls, prompt_mask, torch.zeros(len(item["box"]))
+    
+    def load_image(self, filename):
+        return cv2.imread(filename)
+    
+    def __len__(self):
+        return len(self.data)
+    
+    @staticmethod
+    def collate_fn(batch):
+        samples, box, cls, prompt_mask, indices = zip(*batch)
+        
+        box = torch.cat(box, dim=0)
+        cls = torch.cat(cls, dim=0)
+        
+        new_indices = list(indices)
+        for i in range(len(indices)):
+            new_indices[i] += i
+        indices = torch.cat(new_indices, dim=0)
+
+        targets = {'box': box,
+                   'idx': indices,
+                   'cls': cls}
+        return torch.stack(samples, dim=0), torch.stack(prompt_mask, dim=0), targets
+    
 class LoadVisualPrompt:
-    def __init__(self):
+    def __init__(self, nc=1):
         self.scale_factor = 1/8
+        self.nc = nc
     
     def make_mask(self, boxes, h, w):
         x1, y1, x2, y2 = torch.chunk(boxes[:, :, None], 4, 1)  # x1 shape(n,1,1)
@@ -147,12 +214,17 @@ class LoadVisualPrompt:
 
         return ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))
     
-    def __call__(self, image, target_box):
+    def __call__(self, image, target_box, target_cls):
         imgsz = image.shape[1:]
         masksz = (int(imgsz[0] * self.scale_factor), int(imgsz[1] * self.scale_factor))
 
         box = util.xywh2xyxy(target_box) * torch.tensor(masksz)[[1, 0, 1, 0]]  # target boxes
         masks = self.make_mask(box, *masksz).float()
+        cls = target_cls.squeeze(-1).to(torch.int)
         
-        return masks
+        visuals = torch.zeros(self.nc, *masksz)
+        for idx, mask in zip(cls, masks):
+            visuals[idx] = torch.logical_or(visuals[idx], mask)
+
+        return visuals
   
