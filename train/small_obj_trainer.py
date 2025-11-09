@@ -34,8 +34,8 @@ def train(args, params):
     model.cuda()
 
     # Optimizer
-    accumulate = max(round(64 / args.batch_size), 1)
-    params['weight_decay'] *= args.batch_size * accumulate / 64
+    accumulate = max(round(32 / args.batch_size), 1)
+    params['weight_decay'] *= args.batch_size * accumulate / 32
 
     p = [], [], []
     for v in model.modules():

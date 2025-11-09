@@ -223,8 +223,14 @@ class LoadVisualPrompt:
         cls = target_cls.squeeze(-1).to(torch.int)
         
         visuals = torch.zeros(self.nc, *masksz)
+        cls_mask_dict = {}
         for idx, mask in zip(cls, masks):
-            visuals[idx] = torch.logical_or(visuals[idx], mask)
+            cls_mask_dict.setdefault(idx, []).append(mask)
+        
+        for idx, cls_masks in cls_mask_dict.items():
+            sorted(cls_masks, key=lambda item: item.sum())
+            for mask in cls_masks[:3]:
+                visuals[idx] = torch.logical_or(visuals[idx], mask)
 
         return visuals
   
