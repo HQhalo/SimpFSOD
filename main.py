@@ -30,8 +30,8 @@ def profile(args, params):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-size', default=640, type=int)
-    parser.add_argument('--batch-size', default=64, type=int)
-    parser.add_argument('--epochs', default=4, type=int)
+    parser.add_argument('--batch-size', default=32, type=int)
+    parser.add_argument('--epochs', default=8, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--small-obj', action='store_true')
     parser.add_argument('--test', action='store_true')

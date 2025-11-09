@@ -70,11 +70,12 @@ def train(args, params):
         model.train()
 
         avg_box_loss = loss.AverageMeter()
+        avg_cls_loss = loss.AverageMeter()
         avg_dfl_loss = loss.AverageMeter()
         optimizer.zero_grad()
 
         p_bar = enumerate(loader)
-        print(('\n' + '%10s' * 4) % ('epoch', 'memory', 'box', 'dfl'))
+        print(('\n' + '%10s' * 5) % ('epoch', 'memory', 'box', 'cls', 'dfl'))
         p_bar = tqdm.tqdm(p_bar, total=num_steps, dynamic_ncols=False, ncols=100)
         for i, (sample, prompt_mask, targets) in p_bar:
             step = i + num_steps * epoch
@@ -87,16 +88,18 @@ def train(args, params):
             with torch.amp.autocast(device_type=device):
                 outputs = model.forward_non_cross(sample, prompt_mask)
                 
-            loss_box, _, loss_dfl = criterion(outputs, targets)
+            loss_box, loss_cls, loss_dfl = criterion(outputs, targets)
 
             avg_box_loss.update(loss_box.item(), sample.size(0))
+            avg_cls_loss.update(loss_cls.item(), sample.size(0))
             avg_dfl_loss.update(loss_dfl.item(), sample.size(0))
 
             loss_box *= args.batch_size  # loss scaled by batch_size
+            loss_cls *= args.batch_size  # loss scaled by batch_size
             loss_dfl *= args.batch_size  # loss scaled by batch_size
 
             # Backward
-            amp_scale.scale(loss_box + loss_dfl).backward()
+            amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
 
             # Optimize
             # amp_scale.unscale_(optimizer)  # unscale gradients
@@ -109,8 +112,8 @@ def train(args, params):
 
             # Log
             memory = f'{torch.cuda.memory_reserved() / 1E9:.4g}G'  # (GB)
-            s = ('%10s' * 2 + '%10.3g' * 2) % (f'{epoch + 1}/{args.epochs}', memory,
-                                                avg_box_loss.avg, avg_dfl_loss.avg)
+            s = ('%10s' * 2 + '%10.3g' * 3) % (f'{epoch + 1}/{args.epochs}', memory,
+                                                    avg_box_loss.avg, avg_cls_loss.avg, avg_dfl_loss.avg)
             p_bar.set_description(s)
 
         # mAP
@@ -162,7 +165,7 @@ def test(args, params, model, loader):
         outputs = model.forward_non_cross(sample, prompt_mask)
 
         # NMS
-        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.3)
+        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.6)
         # Metrics
         for i, output in enumerate(outputs):
             idx = targets['idx'] == i

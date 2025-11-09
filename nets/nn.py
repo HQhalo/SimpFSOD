@@ -300,9 +300,7 @@ class Head(torch.nn.Module):
 
     def forward(self, x, vpe):
         for i, (box, emb, bn) in enumerate(zip(self.box, self.emb, self.bn)):
-            emb_tmp = emb(x[i])
-            bn_tmp = bn(emb_tmp, vpe)
-            x[i] = torch.cat(tensors=(box(x[i]), bn_tmp), dim=1)
+            x[i] = torch.cat(tensors=(box(x[i]), bn(emb(x[i]), vpe)), dim=1)
         if self.training:
             return x
 
