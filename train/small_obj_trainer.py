@@ -34,6 +34,9 @@ def train(args, params):
     model.cuda()
 
     # Optimizer
+    accumulate = max(round(64 / args.batch_size), 1)
+    params['weight_decay'] *= args.batch_size * accumulate / 64
+
     p = [], [], []
     for v in model.modules():
         if hasattr(v, 'bias') and isinstance(v.bias, torch.nn.Parameter):
@@ -102,13 +105,16 @@ def train(args, params):
             amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
 
             # Optimize
-            # amp_scale.unscale_(optimizer)  # unscale gradients
-            # util.clip_gradients(model)  # clip gradients
-            amp_scale.step(optimizer)  # optimizer.step
-            amp_scale.update()
-            optimizer.zero_grad()
-            if ema:
-                ema.update(model)
+            if step % accumulate == 0:
+                # amp_scale.unscale_(optimizer)  # unscale gradients
+                # util.clip_gradients(model)  # clip gradients
+                amp_scale.step(optimizer)  # optimizer.step
+                amp_scale.update()
+                optimizer.zero_grad()
+                if ema:
+                    ema.update(model)
+            
+            torch.cuda.synchronize()
 
             # Log
             memory = f'{torch.cuda.memory_reserved() / 1E9:.4g}G'  # (GB)
