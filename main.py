@@ -9,10 +9,11 @@ import thop
 from nets import nn, loss
 from utils import util
 from train import trainer, small_obj_trainer
+from dataset.dataset import SyntheticVPDataset
 
 warnings.filterwarnings("ignore")
 
-def profile(args, params):
+def profile(args):
     shape = (1, 3, args.input_size, args.input_size)
     model = nn.yolo_v8_s().fuse()
 
@@ -43,17 +44,20 @@ def main():
 
     util.setup_seed()
     util.setup_multi_processes()
-
-    with open(os.path.join('utils', 'args.yaml'), errors='ignore') as f:
-        params = yaml.safe_load(f)
     
-    profile(args, params)
+    profile(args)
 
     if args.train:
+        with open(os.path.join('cfg', 'trainner-args.yaml'), errors='ignore') as f:
+            params = yaml.safe_load(f)
         trainer.train(args, params)
     if args.small_obj:
+        with open(os.path.join('cfg', 'small-obj-args.yaml'), errors='ignore') as f:
+            params = yaml.safe_load(f)
         small_obj_trainer.train(args, params)
     if args.test:
+        with open(os.path.join('cfg', 'trainner-args.yaml'), errors='ignore') as f:
+            params = yaml.safe_load(f)
         trainer.test(args, params)
 
 if __name__ == "__main__":

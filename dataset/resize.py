@@ -58,6 +58,10 @@ class LetterBox():
 
         # Resize
         image, ratio, pad = self.resize(image, self.input_size, augment)
+        alpha = None
+        if image.shape[2] == 4:
+            alpha = image[:, :, 3]
+            image = image[:, :, :3]
         box = wh2xy(box, ratio[0] * w, ratio[1] * h, pad[0], pad[1])
         if augment:
             new_image, new_label = random_perspective(image.copy(), label.copy(), self.params)
@@ -68,8 +72,11 @@ class LetterBox():
         # Convert HWC to CHW, BGR to RGB
         sample = image.transpose((2, 0, 1))[::-1]
         sample = numpy.ascontiguousarray(sample)
-        
-        return torch.from_numpy(sample), torch.from_numpy(box), torch.from_numpy(cls)
+        if alpha is None:
+            return torch.from_numpy(sample), torch.from_numpy(box), torch.from_numpy(cls)
+        else:
+            return torch.from_numpy(sample), torch.from_numpy(box), torch.from_numpy(cls), torch.from_numpy(alpha)
+
     
     def albumentations(self, image, box):
         x = self.transform(image=image,
@@ -98,7 +105,8 @@ class LetterBox():
                             interpolation=resample() if augment else cv2.INTER_LINEAR)
         top, bottom = int(round(h - 0.1)), int(round(h + 0.1))
         left, right = int(round(w - 0.1)), int(round(w + 0.1))
-        image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))  # add border
+        border_value = (114, 114, 114, 0) if image.shape[2] == 4 else (114, 114, 114)
+        image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=border_value)  # add border
         return image, (r, r), (w, h)
 
     

@@ -416,7 +416,10 @@ def yolo_v8_x(number_class=1):
 def load_model(model_path, number_class=1):
     model = yolo_v8_s(number_class)
     weights = torch.load(model_path, weights_only=False)
-    pretrained_state_dict = weights.state_dict()
+    if isinstance(weights, dict) and "model" in weights:
+        pretrained_state_dict = weights["model"].state_dict()
+    else:
+        pretrained_state_dict = weights.state_dict()
     # new_state_dict = {k: v for k, v in pretrained_state_dict.items() if not k.startswith('head.cls')}
 
     model.load_state_dict(pretrained_state_dict, strict=False)

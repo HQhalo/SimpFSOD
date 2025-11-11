@@ -20,24 +20,24 @@ def train(args, params):
     print(f"Using device: {device}")
 
     # Model
-    model = nn.load_model("/home/quang/CODE/SimpFSOD/yoloe-v8s-pretrained.pt")
+    model = nn.load_model("/home/quang/CODE/SimpFSOD/best.pt", 1)
 
     for name, param in model.net.named_parameters():
         param.requires_grad = False
     for name, param in model.fpn.named_parameters():
         param.requires_grad = False
-    for name, param in model.head.box.named_parameters():
-        param.requires_grad = False
+    # for name, param in model.head.box.named_parameters():
+    #     param.requires_grad = False
 
-    # for name, param in model.named_parameters():
-    #     if not name.startswith("head.savpe"):
-    #         param.requires_grad = False
-    
+
     print(params)
 
     model.cuda()
 
     # Optimizer
+    accumulate = max(round(64 / args.batch_size), 1)
+    params['weight_decay'] *= args.batch_size * accumulate / 64
+
     p = [], [], []
     for v in model.modules():
         if hasattr(v, 'bias') and isinstance(v.bias, torch.nn.Parameter):
@@ -56,20 +56,21 @@ def train(args, params):
     ema = util.EMA(model)
 
     # Dataset
-    dataset = VPDataset("/home/quang/DATA/got10k/train", 640, params, augment=True)
-    loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True)
-    
-    dataset_test = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=False)
-    loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4, pin_memory=True)
-
-    # folder = "/home/quang/DATA/zalo_dataset"
-    # videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
-    # dataset = ZaloVPDataset(folder, 640, params, augment=True, videos=videos[:-2])
+    # dataset = VPDataset("/home/quang/DATA/got10k/train", 640, params, augment=True)
     # loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True)
+    
+    # dataset_test = VPDataset("/home/quang/DATA/got10k/val", 640, params, augment=False)
+    # loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4, pin_memory=True)
 
-    # dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
-    # loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
-    #                          pin_memory=True)
+    folder = "/home/quang/DATA/zalo_dataset"
+    videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
+    dataset = ZaloVPDataset(folder, 640, params, augment=True, videos=videos[:-2])
+    loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True,
+                             collate_fn=ZaloVPDataset.collate_fn)
+
+    dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
+    loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
+                             pin_memory=True, collate_fn=ZaloVPDataset.collate_fn)
 
     # Scheduler
     num_steps = len(loader)
@@ -79,51 +80,47 @@ def train(args, params):
     best = 0
     amp_scale = torch.amp.GradScaler()
     criterion = loss.ComputeLoss(model, params)
-    with open('weights/step.csv', 'w') as f:
-        writer = csv.DictWriter(f, fieldnames=['epoch',
-                                                    'box', 'cls', 'dfl',
-                                                    'Recall', 'Precision', 'mAP@50', 'mAP'])
-        writer.writeheader()
-        for epoch in range(args.epochs):
-            model.train()
 
-            if args.epochs - epoch == 10:
-                loader.dataset.mosaic = False
+    for epoch in range(args.epochs):
+        model.train()
 
-            avg_box_loss = loss.AverageMeter()
-            avg_cls_loss = loss.AverageMeter()
-            avg_dfl_loss = loss.AverageMeter()
-            optimizer.zero_grad()
+        if args.epochs - epoch == 10:
+            loader.dataset.mosaic = False
 
-            p_bar = enumerate(loader)
-            print(('\n' + '%10s' * 5) % ('epoch', 'memory', 'box', 'cls', 'dfl'))
-            p_bar = tqdm.tqdm(p_bar, total=num_steps, dynamic_ncols=False, ncols=100)
-            for i, (sample, box, prompt, prompt_mask) in p_bar:
-                step = i + num_steps * epoch
-                scheduler.step(step, optimizer)
+        avg_box_loss = loss.AverageMeter()
+        avg_cls_loss = loss.AverageMeter()
+        avg_dfl_loss = loss.AverageMeter()
+        optimizer.zero_grad()
 
-                sample = sample.cuda().float() / 255
-                prompt = prompt.cuda().float() / 255
-                prompt_mask = prompt_mask.cuda()
+        p_bar = enumerate(loader)
+        print(('\n' + '%10s' * 5) % ('epoch', 'memory', 'box', 'cls', 'dfl'))
+        p_bar = tqdm.tqdm(p_bar, total=num_steps, dynamic_ncols=False, ncols=100)
+        for i, (sample, prompt_img, prompt_mask, targets) in p_bar:
+            step = i + num_steps * epoch
+            scheduler.step(step, optimizer)
 
-                # Forward
-                with torch.amp.autocast(device_type=device):
-                    vpe = model.get_vpe(prompt, prompt_mask)
-                    outputs = model(sample, vpe)  # forward
-                loss_box, loss_cls, loss_dfl = criterion(outputs, box)
+            sample = sample.cuda().float() / 255
+            prompt_img = prompt_img.cuda().float() / 255
+            prompt_mask = prompt_mask.cuda()
 
-                avg_box_loss.update(loss_box.item(), sample.size(0))
-                avg_cls_loss.update(loss_cls.item(), sample.size(0))
-                avg_dfl_loss.update(loss_dfl.item(), sample.size(0))
+            # Forward
+            with torch.amp.autocast(device_type=device):
+                vpe = model.get_vpe(prompt_img, prompt_mask)
+                outputs = model(sample, vpe)  # forward
+            loss_box, loss_cls, loss_dfl = criterion(outputs, targets)
 
-                loss_box *= args.batch_size  # loss scaled by batch_size
-                loss_cls *= args.batch_size  # loss scaled by batch_size
-                loss_dfl *= args.batch_size  # loss scaled by batch_size
+            avg_box_loss.update(loss_box.item(), sample.size(0))
+            avg_cls_loss.update(loss_cls.item(), sample.size(0))
+            avg_dfl_loss.update(loss_dfl.item(), sample.size(0))
 
-                # Backward
-                amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
+            loss_box *= args.batch_size  # loss scaled by batch_size
+            loss_cls *= args.batch_size  # loss scaled by batch_size
+            loss_dfl *= args.batch_size  # loss scaled by batch_size
 
-                # Optimize
+            # Backward
+            amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
+
+            if step % accumulate == 0:
                 # amp_scale.unscale_(optimizer)  # unscale gradients
                 # util.clip_gradients(model)  # clip gradients
                 amp_scale.step(optimizer)  # optimizer.step
@@ -131,40 +128,32 @@ def train(args, params):
                 optimizer.zero_grad()
                 if ema:
                     ema.update(model)
+            
+            torch.cuda.synchronize()
 
-                # Log
-                memory = f'{torch.cuda.memory_reserved() / 1E9:.4g}G'  # (GB)
-                s = ('%10s' * 2 + '%10.3g' * 3) % (f'{epoch + 1}/{args.epochs}', memory,
-                                                    avg_box_loss.avg, avg_cls_loss.avg, avg_dfl_loss.avg)
-                p_bar.set_description(s)
+            # Log
+            memory = f'{torch.cuda.memory_reserved() / 1E9:.4g}G'  # (GB)
+            s = ('%10s' * 2 + '%10.5g' * 3) % (f'{epoch + 1}/{args.epochs}', memory,
+                                                avg_box_loss.avg, avg_cls_loss.avg, avg_dfl_loss.avg)
+            p_bar.set_description(s)
 
 
-            # mAP
-            last = test(args, params, ema.ema, loader_test)
+        # mAP
+        last = test(args, params, ema.ema, loader_test)
 
-            writer.writerow({'epoch': str(epoch + 1).zfill(3),
-                                'box': str(f'{avg_box_loss.avg:.3f}'),
-                                'cls': str(f'{avg_cls_loss.avg:.3f}'),
-                                'dfl': str(f'{avg_dfl_loss.avg:.3f}'),
-                                'mAP': str(f'{last[0]:.3f}'),
-                                'mAP@50': str(f'{last[1]:.3f}'),
-                                'Recall': str(f'{last[2]:.3f}'),
-                                'Precision': str(f'{last[3]:.3f}')})
-            f.flush()
+        # Update best mAP
+        if last[0] > best:
+            best = last[0]
 
-            # Update best mAP
-            if last[0] > best:
-                best = last[0]
+        # Save model
+        save = {'epoch': epoch + 1,
+                'model': copy.deepcopy(ema.ema)}
 
-            # Save model
-            save = {'epoch': epoch + 1,
-                    'model': copy.deepcopy(ema.ema)}
-
-            # Save last, best and delete
-            torch.save(save, f='./weights/last.pt')
-            if best == last[0]:
-                torch.save(save, f='./weights/best.pt')
-            del save
+        # Save last, best and delete
+        torch.save(save, f='./weights/last.pt')
+        if best == last[0]:
+            torch.save(save, f='./weights/best.pt')
+        del save
 
     util.strip_optimizer('./weights/best.pt')  # strip optimizers
     util.strip_optimizer('./weights/last.pt')  # strip optimizers
@@ -178,12 +167,12 @@ def test(args, params, model=None, loader=None):
         videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
         dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
         loader = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
-                                pin_memory=True)
+                                pin_memory=True, collate_fn=ZaloVPDataset.collate_fn)
 
     if not model:
         # model = torch.load(f='./weights/best.pt', map_location='cuda')
         # model = model['model'].float().fuse()
-        model = nn.load_model("/home/quang/CODE/SimpFSOD/weights/best.pt")
+        model = nn.load_model("/home/quang/CODE/SimpFSOD/zalo-best.pt")
         model = model.cuda()
 
 
@@ -200,29 +189,33 @@ def test(args, params, model=None, loader=None):
     mean_ap = 0
     metrics = []
     p_bar = tqdm.tqdm(loader, desc=('%10s' * 5) % ('', 'precision', 'recall', 'mAP50', 'mAP'), dynamic_ncols=False, ncols=100)
-    for samples, box_target, prompt, prompt_mask in p_bar:
+    for samples, prompt_img, prompt_mask, targets in p_bar:
         samples = samples.cuda()
         # samples = samples.half()  # uint8 to fp16/32
         samples = samples / 255.  # 0 - 255 to 0.0 - 1.0
         _, _, h, w = samples.shape  # batch-size, channels, height, width
         scale = torch.tensor((w, h, w, h)).cuda()
         
-        prompt = prompt.cuda()
-        prompt = prompt / 255.
+        prompt_img = prompt_img.cuda()
+        prompt_img = prompt_img / 255.
         # prompt = prompt.half()
 
         prompt_mask = prompt_mask.cuda()
         # prompt_mask = prompt_mask.half()
 
         # Inference
-        vpe = model.get_vpe(prompt, prompt_mask)
+        vpe = model.get_vpe(prompt_img, prompt_mask)
         outputs = model(samples, vpe) 
         # NMS
-        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.3)
+        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.6)
         # Metrics
         for i, output in enumerate(outputs):
-            cls = torch.zeros(1,1).cuda()
-            box = box_target[i].cuda()
+            idx = targets['idx'] == i
+            cls = targets['cls'][idx]
+            box = targets['box'][idx]
+
+            cls = cls.cuda()
+            box = box.cuda()
 
             metric = torch.zeros(output.shape[0], n_iou, dtype=torch.bool).cuda()
             if output.shape[0] == 0:
@@ -241,7 +234,7 @@ def test(args, params, model=None, loader=None):
     if len(metrics) and metrics[0].any():
         tp, fp, m_pre, m_rec, map50, mean_ap = util.compute_ap(*metrics)
     # Print results
-    print(('%10s' + '%10.3g' * 4) % ('', m_pre, m_rec, map50, mean_ap))
+    print(('%10s' + '%10.5g' * 4) % ('', m_pre, m_rec, map50, mean_ap))
     # Return results
     model.float()  # for training
     return mean_ap, map50, m_rec, m_pre

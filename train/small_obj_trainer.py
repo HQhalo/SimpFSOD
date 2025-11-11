@@ -22,12 +22,12 @@ def train(args, params):
     for name, param in model.fpn.named_parameters():
         param.requires_grad = False
 
-    # for name, param in model.head.emb.named_parameters():
-    #     param.requires_grad = False
-    # for name, param in model.head.bn.named_parameters():
-    #     param.requires_grad = False
-    # for name, param in model.head.savpe.named_parameters():
-    #     param.requires_grad = False
+    for name, param in model.head.emb.named_parameters():
+        param.requires_grad = False
+    for name, param in model.head.bn.named_parameters():
+        param.requires_grad = False
+    for name, param in model.head.savpe.named_parameters():
+        param.requires_grad = False
     
     print(params)
 
@@ -102,7 +102,7 @@ def train(args, params):
             loss_dfl *= args.batch_size  # loss scaled by batch_size
 
             # Backward
-            amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
+            amp_scale.scale(loss_box + loss_dfl).backward()
 
             # Optimize
             if step % accumulate == 0:
@@ -118,7 +118,7 @@ def train(args, params):
 
             # Log
             memory = f'{torch.cuda.memory_reserved() / 1E9:.4g}G'  # (GB)
-            s = ('%10s' * 2 + '%10.3g' * 3) % (f'{epoch + 1}/{args.epochs}', memory,
+            s = ('%10s' * 2 + '%10.5g' * 3) % (f'{epoch + 1}/{args.epochs}', memory,
                                                     avg_box_loss.avg, avg_cls_loss.avg, avg_dfl_loss.avg)
             p_bar.set_description(s)
 
