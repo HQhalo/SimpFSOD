@@ -195,7 +195,7 @@ class SyntheticVPDataset(VPDataset):
         # prompt
         
         prompt_img = self.load_prompt_image(item["prompt_img"])
-        prompt_img, target_box, prompt_cls, alpha = self.letter_box(prompt_img, numpy.array([[0,1,1,10,10]]), augment=False, coco_fotmat=True)
+        prompt_img, _, prompt_cls, alpha = self.letter_box(prompt_img, numpy.array([[0,1,1,10,10]]), augment=False, coco_fotmat=True)
         alpha = (alpha > 0).float().unsqueeze(0)
         prompt_mask = self.vp_loader(prompt_img, None, prompt_cls, alpha)
                       
