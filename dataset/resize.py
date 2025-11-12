@@ -1,7 +1,6 @@
 import cv2
 import numpy
 import random
-import albumentations
 import torch
 from dataset.transform import augment_hsv, random_perspective
 
@@ -14,14 +13,12 @@ def resample():
     return random.choice(seq=choices)
 
 class LetterBox():
-    def __init__(self, input_size, params={}):
+    def __init__(self, input_size, params={}, transform=None):
         self.input_size = input_size
         self.params = params
-        transforms = [albumentations.Blur(p=0.01),
-                        albumentations.CLAHE(p=0.01),
-                        albumentations.ToGray(p=0.01),
-                        albumentations.MedianBlur(p=0.01)]
-        self.transform = albumentations.Compose(transforms)
+        self.transform = transform
+        self.ratio = None
+        self.pad = None
 
     def __call__(self, image, org_label, augment = False, coco_fotmat = False):
         """
@@ -58,6 +55,8 @@ class LetterBox():
 
         # Resize
         image, ratio, pad = self.resize(image, self.input_size, augment)
+        self.ratio = ratio
+        self.pad = pad
         alpha = None
         if image.shape[2] == 4:
             alpha = image[:, :, 3]
@@ -109,6 +108,8 @@ class LetterBox():
         image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=border_value)  # add border
         return image, (r, r), (w, h)
 
+    def convert_box(self, x):
+        return xyxy2xyxy(x, self.ratio[0], self.ratio[1], self.pad[0], self.pad[1])
     
 def coco2wh(x, w=640, h=640):
     """
@@ -131,6 +132,13 @@ def wh2xy(x, w=640, h=640, pad_w=0, pad_h=0):
     y[:, 2] = w * (x[:, 0] + x[:, 2] / 2) + pad_w  # bottom right x
     y[:, 3] = h * (x[:, 1] + x[:, 3] / 2) + pad_h  # bottom right y
     return y
+
+def xyxy2xyxy(x, r_w, r_h, pad_w, pad_h):
+    y = numpy.copy(x)
+    y[:0] = (x[:, 0] - pad_w) / r_w
+    y[:1] = (x[:, 0] - pad_h) / r_h
+    y[:2] = (x[:, 2] - pad_w) / r_w
+    y[:3] = (x[:, 3] - pad_h) / r_h
 
 def xy2wh(x, w, h):
     # warning: inplace clip

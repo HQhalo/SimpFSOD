@@ -9,6 +9,7 @@ import glob
 from utils import util
 import json
 import cv2
+import albumentations
 
 class VPDataset(data.Dataset):
     def __init__(self, folder, input_size, params, augment):
@@ -17,8 +18,15 @@ class VPDataset(data.Dataset):
         self.augment = augment
         self.input_size = input_size
         
+        transforms = [albumentations.Blur(p=0.01),
+                        albumentations.CLAHE(p=0.01),
+                        albumentations.ToGray(p=0.01),
+                        albumentations.MedianBlur(p=0.01)]
+        transform = albumentations.Compose(transforms)
+
+
         self.vp_loader = LoadVisualPrompt()
-        self.letter_box = LetterBox(input_size, params)
+        self.letter_box = LetterBox(input_size, params, transform)
 
         self.data = self.read_data(folder)
         
@@ -219,7 +227,62 @@ class SyntheticVPDataset(VPDataset):
                    'idx': indices,
                    'cls': cls}
         return torch.stack(samples, dim=0), torch.stack(prompt_img, dim=0), torch.stack(prompt_mask, dim=0), targets
+
+class ZaloV2VPDataset(SyntheticVPDataset):
+    def __init__(self, folder, input_size, params, augment):
+        self.cache = {}
+        super().__init__(folder, input_size, params, augment)
+
+    def read_data(self, folder):
+        data = []
+        with open(f"{folder}/annotations/annotations.json") as f:
+            frame_data = json.load(f)
+        
+        videos = [entry.name for entry in os.scandir(f"{folder}/samples") if entry.is_dir()]
+
+        for video in videos:
+            video_path = os.path.join(folder, "samples", video)
+            imgs = glob.glob(f"{video_path}/images/*.jpg")
+            video_path = video_path.replace("_1", "_0")
+            prompt = glob.glob(f"{video_path}/object_images/*.png")
+            
+            for img in imgs:
+                box_key = img.split("/")[-1]
+                [x1, y1, w, y] = frame_data[f"{video}/images/{box_key}"]
+                box = [0, x1, y1, w, y]
+
+                prompt_img = random.choice(prompt)
+                
+                data.append({
+                            "img": img,
+                            "box": numpy.array([box], dtype=float),
+                            "prompt_img": prompt_img
+                            })
+                    
+        return data
     
+    def __getitem__(self, index):
+        item = self.data[index]
+
+        # query
+        query_img = self.load_image(item["img"])
+        query_img, query_box, query_cls = self.letter_box(query_img, item["box"], augment=True, coco_fotmat=True)
+        
+        # prompt
+        if item["prompt_img"] not in self.cache:
+            prompt_img = self.load_prompt_image(item["prompt_img"])
+            mask_transparent = prompt_img[:, :, 3] == 0
+            prompt_img[mask_transparent, :3] = 114
+
+            prompt_img, _, prompt_cls, alpha = self.letter_box(prompt_img, numpy.array([[0,1,1,10,10]]), augment=False, coco_fotmat=True)
+            alpha = (alpha > 0).float().unsqueeze(0)
+            prompt_mask = self.vp_loader(prompt_img, None, prompt_cls, alpha)
+
+            self.cache[item["prompt_img"]] = (prompt_img, prompt_mask)
+
+        (prompt_img, prompt_mask) = self.cache[item["prompt_img"]]            
+        return query_img, query_box , query_cls, prompt_img, prompt_mask, torch.zeros(len(item["box"]))
+
 class VisDroneDataset(data.Dataset):
     def __init__(self, folder, input_size, params, augment, nc=1):
         self.params = params
