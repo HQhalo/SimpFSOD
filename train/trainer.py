@@ -9,7 +9,7 @@ from torch.utils import data
 
 from nets import nn, loss
 from utils import util
-from dataset.dataset import VPDataset, ZaloVPDataset
+from dataset.dataset import VPDataset, ZaloVPDataset, SyntheticVPDataset
 
 warnings.filterwarnings("ignore")
 
@@ -20,7 +20,7 @@ def train(args, params):
     print(f"Using device: {device}")
 
     # Model
-    model = nn.load_model("/home/quang/CODE/SimpFSOD/best.pt", 1)
+    model = nn.load_model("/home/quang/CODE/SimpFSOD/yoloe-v8s-pretrained.pt", 1)
 
     for name, param in model.net.named_parameters():
         param.requires_grad = False
@@ -64,11 +64,15 @@ def train(args, params):
 
     folder = "/home/quang/DATA/zalo_dataset"
     videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
-    dataset = ZaloVPDataset(folder, 640, params, augment=True, videos=videos[:-2])
+    # dataset = ZaloVPDataset(folder, 640, params, augment=True, videos=videos[:-2])
+    # loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True,
+    #                          collate_fn=ZaloVPDataset.collate_fn)
+    
+    dataset = SyntheticVPDataset("/home/quang/DATA/synthtic_dataset", 768, params, augment=True)
     loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True,
-                             collate_fn=ZaloVPDataset.collate_fn)
+                             collate_fn=SyntheticVPDataset.collate_fn)
 
-    dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
+    dataset_test = ZaloVPDataset(folder, 768, params, augment=False, videos=videos)
     loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
                              pin_memory=True, collate_fn=ZaloVPDataset.collate_fn)
 
@@ -207,7 +211,8 @@ def test(args, params, model=None, loader=None):
         vpe = model.get_vpe(prompt_img, prompt_mask)
         outputs = model(samples, vpe) 
         # NMS
-        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.6)
+        # outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.6)
+        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.4)
         # Metrics
         for i, output in enumerate(outputs):
             idx = targets['idx'] == i

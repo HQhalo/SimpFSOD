@@ -75,6 +75,9 @@ class VPDataset(data.Dataset):
     def load_image(self, filename):
         return cv2.imread(filename)
     
+    def load_prompt_image(self, filename):
+        return cv2.imread(filename, cv2.IMREAD_UNCHANGED) 
+    
     def __len__(self):
       return len(self.data)
     
@@ -88,17 +91,12 @@ class ZaloVPDataset(VPDataset):
         data = []
         with open(f"{folder}/data.json") as f:
             frame_data = json.load(f)
-            
-        with open(f"{folder}/prompt_data.json") as f:
-            prompt_data = {}
-            for k, v in json.load(f).items():
-                nk = "/".join([k.split("/")[0][:-2]] + k.split("/")[1:])
-                prompt_data[nk] = v
-        
+             
         for video in self.videos:
             video_path = os.path.join(folder, video)
             imgs = glob.glob(f"{video_path}/*.jpg")
-            prompt = glob.glob(f"{video_path}/prompt/*.jpg")
+            video_path = video_path.replace("_1", "_0")
+            prompt = glob.glob(f"{video_path}/prompt/*.png")
             
             for img in imgs:
                 box_key =  "/".join(img.split("/")[-2:])
@@ -106,15 +104,11 @@ class ZaloVPDataset(VPDataset):
                 box = [0, x1, y1, x2 - x1, y2- y1]
 
                 prompt_img = random.choice(prompt)
-                prompt_key =  "/".join([prompt_img.split("/")[-3][:-2]] + prompt_img.split("/")[-2:])
-                [x1, y1, x2, y2] = prompt_data[prompt_key]
-                prompt_box = [0, x1, y1, x2 - x1, y2- y1]
-
+                
                 data.append({
                             "img": img,
                             "box": numpy.array([box], dtype=float),
-                            "prompt_img": prompt_img,
-                            "prompt_box": numpy.array([prompt_box], dtype=float)
+                            "prompt_img": prompt_img
                             })
                     
         return data
@@ -128,9 +122,14 @@ class ZaloVPDataset(VPDataset):
         
         # prompt
         if item["prompt_img"] not in self.cache:
-            prompt_img = self.load_image(item["prompt_img"])
-            prompt_img, prompt_box, prompt_cls = self.letter_box(prompt_img, item["prompt_box"], augment=False, coco_fotmat=True)
-            prompt_mask = self.vp_loader(prompt_img, prompt_box, prompt_cls)
+            prompt_img = self.load_prompt_image(item["prompt_img"])
+            mask_transparent = prompt_img[:, :, 3] == 0
+            prompt_img[mask_transparent, :3] = 114
+
+            prompt_img, _, prompt_cls, alpha = self.letter_box(prompt_img, numpy.array([[0,1,1,10,10]]), augment=False, coco_fotmat=True)
+            alpha = (alpha > 0).float().unsqueeze(0)
+            prompt_mask = self.vp_loader(prompt_img, None, prompt_cls, alpha)
+
             self.cache[item["prompt_img"]] = (prompt_img, prompt_mask)
 
         (prompt_img, prompt_mask) = self.cache[item["prompt_img"]]            
@@ -195,14 +194,14 @@ class SyntheticVPDataset(VPDataset):
         # prompt
         
         prompt_img = self.load_prompt_image(item["prompt_img"])
+        mask_transparent = prompt_img[:, :, 3] == 0
+        prompt_img[mask_transparent, :3] = 114
+
         prompt_img, _, prompt_cls, alpha = self.letter_box(prompt_img, numpy.array([[0,1,1,10,10]]), augment=False, coco_fotmat=True)
         alpha = (alpha > 0).float().unsqueeze(0)
         prompt_mask = self.vp_loader(prompt_img, None, prompt_cls, alpha)
                       
         return query_img, query_box , query_cls, prompt_img, prompt_mask, torch.zeros(len(item["box"]))
-    
-    def load_prompt_image(self, filename):
-        return cv2.imread(filename, cv2.IMREAD_UNCHANGED) 
     
     @staticmethod
     def collate_fn(batch):

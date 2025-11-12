@@ -105,7 +105,7 @@ class LetterBox():
                             interpolation=resample() if augment else cv2.INTER_LINEAR)
         top, bottom = int(round(h - 0.1)), int(round(h + 0.1))
         left, right = int(round(w - 0.1)), int(round(w + 0.1))
-        border_value = (0, 0, 0, 0) if image.shape[2] == 4 else (114, 114, 114)
+        border_value = (114, 114, 114, 0) if image.shape[2] == 4 else (114, 114, 114)
         image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=border_value)  # add border
         return image, (r, r), (w, h)
 
