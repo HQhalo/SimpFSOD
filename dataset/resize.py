@@ -108,7 +108,7 @@ class LetterBox():
         image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=border_value)  # add border
         return image, (r, r), (w, h)
 
-    def convert_box(self, x):
+    def unletter_box(self, x):
         return xyxy2xyxy(x, self.ratio[0], self.ratio[1], self.pad[0], self.pad[1])
     
 def coco2wh(x, w=640, h=640):
@@ -135,10 +135,11 @@ def wh2xy(x, w=640, h=640, pad_w=0, pad_h=0):
 
 def xyxy2xyxy(x, r_w, r_h, pad_w, pad_h):
     y = numpy.copy(x)
-    y[:0] = (x[:, 0] - pad_w) / r_w
-    y[:1] = (x[:, 0] - pad_h) / r_h
-    y[:2] = (x[:, 2] - pad_w) / r_w
-    y[:3] = (x[:, 3] - pad_h) / r_h
+    y[:, 0] = (x[:, 0] - pad_w) / r_w
+    y[:, 1] = (x[:, 1] - pad_h) / r_h
+    y[:, 2] = (x[:, 2] - pad_w) / r_w
+    y[:, 3] = (x[:, 3] - pad_h) / r_h
+    return y
 
 def xy2wh(x, w, h):
     # warning: inplace clip
