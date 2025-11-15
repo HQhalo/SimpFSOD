@@ -230,7 +230,7 @@ class SAVPE(torch.nn.Module):
 
         score = y * vp + torch.logical_not(vp) * torch.finfo(y.dtype).min
  
-        score = torch.nn.functional.softmax(score, dim=-1, dtype=torch.float).to(score.dtype)
+        score = torch.nn.functional.softmax(score, dim=-1).to(y.dtype)
 
         aggregated = score.transpose(-2, -3) @ x.reshape(B, self.c, C // self.c, -1).transpose(-1, -2)
         
@@ -259,6 +259,9 @@ class BNContrastiveHead(torch.nn.Module):
         # w = F.normalize(w, dim=-1, p=2)
         
         x = torch.einsum("bchw,bkc->bkhw", x, w)
+        if not self.training:
+            x = 0.5 * torch.max(x, dim=1, keepdim=True).values + 0.5 * torch.mean(x, dim=1, keepdim=True)
+
         return x * self.logit_scale.exp() + self.bias
 
 class Head(torch.nn.Module):

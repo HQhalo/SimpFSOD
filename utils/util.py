@@ -12,9 +12,9 @@ def setup_seed():
     """
     Setup random seed.
     """
-    random.seed(0)
-    numpy.random.seed(0)
-    torch.manual_seed(0)
+    random.seed(42)
+    numpy.random.seed(42)
+    torch.manual_seed(42)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 

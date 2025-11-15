@@ -90,9 +90,10 @@ class VPDataset(data.Dataset):
       return len(self.data)
     
 class ZaloVPDataset(VPDataset):
-    def __init__(self, folder, input_size, params, augment, videos):
+    def __init__(self, folder, input_size, params, augment, videos, sample_down = 1):
         self.cache = {}
         self.videos = videos
+        self.sample_down = sample_down
         super().__init__(folder, input_size, params, augment)
     
     def read_data(self, folder):
@@ -106,13 +107,16 @@ class ZaloVPDataset(VPDataset):
             video_path = video_path.replace("_1", "_0")
             prompt = glob.glob(f"{video_path}/prompt/*.png")
             
+            n = len(imgs)
+            imgs = numpy.array(imgs)[numpy.linspace(0, n-1, n//self.sample_down, dtype=int)]
+            
             for img in imgs:
                 box_key =  "/".join(img.split("/")[-2:])
                 [x1, y1, x2, y2] = frame_data[box_key]
                 box = [0, x1, y1, x2 - x1, y2- y1]
 
                 prompt_img = random.choice(prompt)
-                
+                # for prompt_img in prompt:
                 data.append({
                             "img": img,
                             "box": numpy.array([box], dtype=float),
@@ -126,7 +130,13 @@ class ZaloVPDataset(VPDataset):
 
         # query
         query_img = self.load_image(item["img"])
-        query_img, query_box, query_cls = self.letter_box(query_img, item["box"], augment=True, coco_fotmat=True)
+        box = item["box"][0]
+        if box[0] + box[2] <= self.input_size:
+            query_img = query_img[:,:self.input_size,:]
+        else:
+            box[0] -= (query_img.shape[1] - self.input_size)
+            query_img = query_img[:,-self.input_size:,:]
+        query_img, query_box, query_cls = self.letter_box(query_img, numpy.array([box], dtype=float), augment=True, coco_fotmat=True)
         
         # prompt
         if item["prompt_img"] not in self.cache:
@@ -176,14 +186,15 @@ class SyntheticVPDataset(VPDataset):
             video_path = os.path.join(folder, "samples", video)
             imgs = glob.glob(f"{video_path}/images/*.jpg")
             prompt = glob.glob(f"{video_path}/object_images/*.png")
-            
+            n = len(imgs)
+            imgs = numpy.array(imgs)[numpy.linspace(0, n-1, n//5, dtype=int)]
+
             for img in imgs:
                 box_key = img.split("/")[-1]
                 [x1, y1, w, y] = frame_data[box_key]
                 box = [0, x1, y1, w, y]
 
                 prompt_img = random.choice(prompt)
-                
                 data.append({
                             "img": img,
                             "box": numpy.array([box], dtype=float),

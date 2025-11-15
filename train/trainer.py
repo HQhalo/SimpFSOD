@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore")
 
 
 def train(args, params):
+    util.setup_seed()
     device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
     print(f"Using device: {device}")
 
@@ -26,17 +27,24 @@ def train(args, params):
         param.requires_grad = False
     for name, param in model.fpn.named_parameters():
         param.requires_grad = False
-    # for name, param in model.head.box.named_parameters():
+    for name, param in model.head.box.named_parameters():
+        param.requires_grad = False
+    for name, param in model.head.emb.named_parameters():
+        param.requires_grad = False
+    for name, param in model.head.dfl.named_parameters():
+        param.requires_grad = False
+    for name, param in model.head.bn.named_parameters():
+        param.requires_grad = False
+    # for name, param in model.head.savpe.named_parameters():
     #     param.requires_grad = False
-
 
     print(params)
 
     model.cuda()
 
     # Optimizer
-    accumulate = max(round(64 / args.batch_size), 1)
-    params['weight_decay'] *= args.batch_size * accumulate / 64
+    accumulate = max(round(32 / args.batch_size), 1)
+    params['weight_decay'] *= args.batch_size * accumulate / 32
 
     p = [], [], []
     for v in model.modules():
@@ -47,9 +55,11 @@ def train(args, params):
         elif hasattr(v, 'weight') and isinstance(v.weight, torch.nn.Parameter):
             p[0].append(v.weight)
 
-    optimizer = torch.optim.SGD(p[2], params['min_lr'], params['momentum'], nesterov=True)
-    optimizer.add_param_group({'params': p[0], 'weight_decay': params['weight_decay']})
-    optimizer.add_param_group({'params': p[1]})
+    optimizer = torch.optim.AdamW([
+            {'params': p[0], 'weight_decay': params['weight_decay']},
+            {'params': p[1], 'weight_decay': 0.0},
+            {'params': p[2], 'weight_decay': 0.0},
+        ], lr= params['min_lr'])
     del p
 
     # EMA
@@ -64,15 +74,18 @@ def train(args, params):
 
     folder = "/home/quang/DATA/zalo_dataset"
     videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
-    # dataset = ZaloVPDataset(folder, 640, params, augment=True, videos=videos[:-2])
-    # loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True,
-    #                          collate_fn=ZaloVPDataset.collate_fn)
+    dataset_zalo = ZaloVPDataset(folder, 640, params, augment=False, videos=videos, sample_down=5)
+    loader = data.DataLoader(dataset_zalo, args.batch_size, True, num_workers=8, pin_memory=True,
+                             collate_fn=ZaloVPDataset.collate_fn)
     
-    dataset = SyntheticVPDataset("/home/quang/DATA/synthtic_dataset", 768, params, augment=True)
-    loader = data.DataLoader(dataset, args.batch_size, True, num_workers=8, pin_memory=True,
-                             collate_fn=SyntheticVPDataset.collate_fn)
+    # dataset_syn = SyntheticVPDataset("/home/quang/DATA/synthtic_dataset", 640, params, augment=False)
+    
+    # dataset = data.ConcatDataset([dataset_syn, dataset_zalo])
 
-    dataset_test = ZaloVPDataset(folder, 768, params, augment=False, videos=videos)
+    # loader = data.DataLoader(dataset_syn, args.batch_size, True, num_workers=8, pin_memory=True,
+    #                          collate_fn=SyntheticVPDataset.collate_fn)
+
+    dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
     loader_test = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
                              pin_memory=True, collate_fn=ZaloVPDataset.collate_fn)
 
@@ -122,7 +135,7 @@ def train(args, params):
             loss_dfl *= args.batch_size  # loss scaled by batch_size
 
             # Backward
-            amp_scale.scale(loss_box + loss_cls + loss_dfl).backward()
+            amp_scale.scale(loss_box + loss_cls+ loss_dfl).backward()
 
             if step % accumulate == 0:
                 # amp_scale.unscale_(optimizer)  # unscale gradients
@@ -170,7 +183,7 @@ def test(args, params, model=None, loader=None):
         folder = "/home/quang/DATA/zalo_dataset"
         videos = [entry.name for entry in os.scandir(folder) if entry.is_dir()]
         dataset_test = ZaloVPDataset(folder, 640, params, augment=False, videos=videos[-2:])
-        loader = data.DataLoader(dataset_test, batch_size=4, shuffle=False, num_workers=4,
+        loader = data.DataLoader(dataset_test, batch_size=16, shuffle=False, num_workers=4,
                                 pin_memory=True, collate_fn=ZaloVPDataset.collate_fn)
 
     if not model:
@@ -212,7 +225,7 @@ def test(args, params, model=None, loader=None):
         outputs = model(samples, vpe) 
         # NMS
         # outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.6)
-        outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.4)
+        outputs = util.non_max_suppression(outputs, conf_threshold=0.2, iou_threshold=0.4)
         # Metrics
         for i, output in enumerate(outputs):
             idx = targets['idx'] == i
