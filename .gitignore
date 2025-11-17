@@ -43,3 +43,4 @@ Thumbs.db
 *.csv
 
 *.mp4
+*.onnx

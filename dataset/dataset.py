@@ -131,11 +131,11 @@ class ZaloVPDataset(VPDataset):
         # query
         query_img = self.load_image(item["img"])
         box = item["box"][0]
-        if box[0] + box[2] <= self.input_size:
-            query_img = query_img[:,:self.input_size,:]
-        else:
-            box[0] -= (query_img.shape[1] - self.input_size)
-            query_img = query_img[:,-self.input_size:,:]
+        # if box[1] + box[3] <= self.input_size:
+        #     query_img = query_img[:,:self.input_size,:]
+        # else:
+        #     box[1] -= (query_img.shape[1] - self.input_size)
+        #     query_img = query_img[:,-self.input_size:,:]
         query_img, query_box, query_cls = self.letter_box(query_img, numpy.array([box], dtype=float), augment=True, coco_fotmat=True)
         
         # prompt

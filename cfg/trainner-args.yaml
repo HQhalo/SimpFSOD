@@ -1,12 +1,12 @@
 min_lr: 0.008        # initial learning rate
-max_lr: 0.05            # maximum learning rate
+max_lr: 0.01            # maximum learning rate
 momentum: 0.900000          # SGD momentum/Adam beta1
 weight_decay: 0.025          # optimizer weight decay 5e-4
 warmup_epochs: 3.000          # warmup epochs
 warmup_momentum: 0.8          # warmup initial momentum
 warmup_bias_lr: 0.10          # warmup initial bias lr
 box: 5.5                      # box loss gain
-cls: 4.0                      # cls loss gain
+cls: 1.0                      # cls loss gain
 dfl: 1.5                      # cls loss gain
 hsv_h: 0.015000               # image HSV-Hue augmentation (fraction)
 hsv_s: 0.500000               # image HSV-Saturation augmentation (fraction)

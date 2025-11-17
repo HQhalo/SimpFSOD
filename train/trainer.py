@@ -225,7 +225,7 @@ def test(args, params, model=None, loader=None):
         outputs = model(samples, vpe) 
         # NMS
         # outputs = util.non_max_suppression(outputs, conf_threshold=0.05, iou_threshold=0.6)
-        outputs = util.non_max_suppression(outputs, conf_threshold=0.2, iou_threshold=0.4)
+        outputs = util.non_max_suppression(outputs, conf_threshold=0.01, iou_threshold=0.6)
         # Metrics
         for i, output in enumerate(outputs):
             idx = targets['idx'] == i
